@@ -1205,11 +1205,7 @@ internal static class NodeTypeBatchBake
             && NodeTypeCompilationHelpers.IsStandingFailureCurrent(
                 standing,
                 mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
-                sources
-                    .Where(n => !string.IsNullOrEmpty(n.Path))
-                    .Aggregate(
-                        System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
-                        (acc, n) => acc.SetItem(n.Path, NodeTypeDefinition.SourceVersionOf(n))),
+                LiveSourceVersions(sources),
                 NodeTypeCompilationHelpers.LivePlatformVersion))
         {
             logger?.LogInformation(
@@ -1292,7 +1288,7 @@ internal static class NodeTypeBatchBake
             .Do(o => logger?.LogInformation(
                 "BatchBake: {TypePath} → {Status}{Detail} — {Cost} — {Memory}",
                 o.TypePath, o.Status,
-                string.IsNullOrEmpty(o.Detail) ? "" : $" ({o.Detail})",
+                string.IsNullOrEmpty(o.Detail) ? "" : $" ({LogDetailOf(o)})",
                 o.DescribeCost(),
                 compileMemory));
     }
@@ -1323,6 +1319,43 @@ internal static class NodeTypeBatchBake
         }
         return total;
     }
+
+    /// <summary>
+    /// What the per-type outcome line says about a failure. 🚨 One attempt, ONE rendering of the
+    /// diagnostics (MeshWeaver#8529): the compile pipeline's single reporting funnel already logged the
+    /// complete Roslyn verdict, and the node's <c>CompilationDiagnostics</c> keep it — so this line,
+    /// which used to repeat the whole multi-line verdict a third time (with every CS1701 warning in
+    /// it), carries only the verdict's SHAPE: each distinct error id and how often it fired. Every
+    /// other status keeps its detail verbatim.
+    /// </summary>
+    internal static string LogDetailOf(PreWarmOutcome outcome)
+    {
+        var detail = outcome.Detail ?? string.Empty;
+        if (outcome.Status is not PreWarmStatus.CompileError
+            || !detail.Contains("Compilation failed", StringComparison.Ordinal))
+            return detail;
+        var ids = System.Text.RegularExpressions.Regex
+            .Matches(detail, @"\b(CS\d{4}) Error\b")
+            .Select(m => m.Groups[1].Value)
+            .GroupBy(id => id, StringComparer.Ordinal)
+            .Select(g => g.Count() > 1 ? $"{g.Key} x{g.Count()}" : g.Key)
+            .ToList();
+        const string Where = "the complete diagnostics are in the preceding failure record and on the node";
+        return ids.Count == 0
+            ? $"compile failed - {Where}"
+            : $"compile failed: {string.Join(", ", ids)} - {Where}";
+    }
+
+    /// <summary>The source set a bake pass resolved, as the path → version map the build-input token
+    /// folds — the ONE derivation both the standing-failure skip and the failure stamp read, so the
+    /// two can never disagree about what "the live sources" are.</summary>
+    internal static System.Collections.Immutable.ImmutableDictionary<string, long> LiveSourceVersions(
+        IEnumerable<MeshNode> sources) =>
+        sources
+            .Where(n => !string.IsNullOrEmpty(n.Path))
+            .Aggregate(
+                System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
+                (acc, n) => acc.SetItem(n.Path, NodeTypeDefinition.SourceVersionOf(n)));
 
     private static IObservable<PreWarmOutcome> StampAndReport(
         IMessageHub mesh,
@@ -1380,7 +1413,10 @@ internal static class NodeTypeBatchBake
                 // store never saw from a verdict.
                 unreleasedBuildFailureClass: outcome is { Attempted: true, Succeeded: false }
                     ? outcome.FailureClass
-                    : null))
+                    : null,
+                // #8529 — what the compile consumed, so a failure's stamp is comparable with the
+                // token the next bake derives from ITS fresh discovery (see ApplyCompileFailure).
+                consumedSources: LiveSourceVersions(sources)))
             .Select(_ =>
             {
                 if (ok)
@@ -1511,7 +1547,8 @@ internal static class NodeTypeBatchBake
         ILogger? logger,
         string? unreleasedBuildPath = null,
         string? unreleasedBuildReason = null,
-        string? unreleasedBuildFailureClass = null)
+        string? unreleasedBuildFailureClass = null,
+        IReadOnlyDictionary<string, long>? consumedSources = null)
     {
         var gate = mesh.ServiceProvider.GetService<MeshPublicationGate>();
         // The forward dependency edges this compile read (Doc/Architecture/DependencyGraph) ride
@@ -1526,7 +1563,8 @@ internal static class NodeTypeBatchBake
         var dependencyEdges = ok ? result?.DependencyEdges : null;
         IObservable<Unit> Stamp() =>
             BuildStamp(mesh, typeNode, ok, result, error, releasePath, startedAt, logger,
-                    unreleasedBuildPath, unreleasedBuildReason, unreleasedBuildFailureClass)
+                    unreleasedBuildPath, unreleasedBuildReason, unreleasedBuildFailureClass,
+                    consumedSources)
                 .Take(1)
                 // The landed record version is the set's GENERATION: an older compile's edges that
                 // arrive after a newer build's never replace them (DependencyEdgeSetWriter.Write).
@@ -1556,7 +1594,8 @@ internal static class NodeTypeBatchBake
         ILogger? logger,
         string? unreleasedBuildPath,
         string? unreleasedBuildReason,
-        string? unreleasedBuildFailureClass)
+        string? unreleasedBuildFailureClass,
+        IReadOnlyDictionary<string, long>? consumedSources = null)
     {
         var storage = mesh.ServiceProvider.GetService<IStorageAdapter>();
         if (storage is null)
@@ -1624,7 +1663,7 @@ internal static class NodeTypeBatchBake
                         : NodeTypeCompilationHelpers.ApplyCompileFailure(
                             def, result, error, activityPath: null,
                             mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
-                            typeNode.Path, refusals))
+                            typeNode.Path, refusals, consumedSources))
                     // The batch driver has no Pending→Compiling flip to stamp this at, and the
                     // shared field-set deliberately does not touch it (the activation path owns it
                     // there). Written here so a per-type duration is derivable FROM THE MESH on both
