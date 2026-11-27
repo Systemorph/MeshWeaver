@@ -761,15 +761,16 @@ public static class NodeTypeBuildState
             return false;
         var compiled = def.CompiledSources;
         var currentPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // The same fold DiscoverSourceVersionSnapshot records CompiledSources with: LastModified
+        // (not Version — that is bumped only by the local hub's MeshNodeTypeSource and may not
+        // surface through the mesh-level synced query this handler reads), with an unchanged-code
+        // source keeping the generation's version (SourceVersionCarry).
+        var folded = SourceVersionCarry.Fold(currentSources, def.CurrentSourceVersions, def.CurrentSourceDigests).Versions;
         foreach (var source in currentSources)
         {
             if (string.IsNullOrEmpty(source.Path)) continue;
             currentPaths.Add(source.Path);
-            // LastModified.UtcTicks (not Version) — must match the snapshot field
-            // captured by DiscoverSourceVersionSnapshot. Version is bumped only by
-            // the local hub's MeshNodeTypeSource and may not surface through the
-            // mesh-level synced query that this handler reads.
-            if (!compiled.TryGetValue(source.Path, out var v) || v != source.LastModified.UtcTicks)
+            if (!compiled.TryGetValue(source.Path, out var v) || v != folded[source.Path])
                 return false;
         }
         foreach (var p in compiled.Keys)

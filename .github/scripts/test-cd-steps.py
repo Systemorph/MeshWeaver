@@ -531,6 +531,23 @@ def run_decide_cases(root, case) -> None:
     case("...and with nothing in flight the same reconcile still builds",
          rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
 
+    # 🚨 A REQUESTED REBUILD IS NOT A DUPLICATE (Plugins#5746). The older run on this sha resolved
+    # Plugins' HEAD before the merge that asked for the rebuild and built nothing; deferring to it
+    # dropped the request while both lanes read green. Negative control: the SAME inputs without
+    # rebuild still defer (above); positive: with rebuild=true the step publishes and says why.
+    for reason, extra in (("reconcile", {"COMPLETE": "true"}), ("reconcile", {"COMPLETE": "false"})):
+        rc, log, outputs = run_step(
+            body, {**reconcile, "REASON": reason, **extra, "FORCE_REBUILD": "true", "GH_RUNS_RESULT": older}, None)
+        case(f"rebuild=true does NOT defer to an older run on the sha (complete={extra['COMPLETE']})",
+             rc == 0 and "publish=true" in outputs and "NOT deferring" in log,
+             f"rc={rc} out={outputs!r} log={log}")
+    rc, log, outputs = run_step(
+        body, {**reconcile, "REASON": "reconcile", "COMPLETE": "true", "FORCE_REBUILD": "false", "GH_RUNS_RESULT": older},
+        None)
+    case("...and an older run still defers the SAME reconcile when rebuild is not requested",
+         rc == 0 and "publish=false" in outputs and older in log,
+         f"rc={rc} out={outputs!r} log={log}")
+
     # ── THE LEDGER RECORDS A FAILURE, NOT A CADENCE (MeshWeaver#4687) ────────────────────────
     #
     # 🚨 <b>109 issues of a 109-issue population recorded a delivery that had not failed.</b>
