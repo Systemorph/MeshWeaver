@@ -39,12 +39,12 @@ The model picker reads `ModelProvider` + `LanguageModel` mesh nodes. Create/patc
 
 ## Option B — Default static catalog via Helm config (needs redeploy)
 
-`BuiltInLanguageModelProvider` materialises a **default** catalog at `Provider/{provider}` + nested model children from config (`{Section}:Models` / `:Endpoint`) — imported into the top-level `Provider` partition on boot and served from the DB. The tier→model map now lives on the model NODES (`"tier": "coding"` — see [Model Tiers](/Doc/AI/ModelTiers)); the `ModelTier:Heavy/Standard/Light/Utility` keys below are the deprecated shim, still read so an existing deployment keeps its mapping. The AKS overlay (`deploy/aks/values.aks.yaml`) sets:
+`BuiltInLanguageModelProvider` materialises a **default** catalog at `Provider/{provider}` + nested model children from config (`{Section}:Models` / `:Endpoint`) — imported into the top-level `Provider` partition on boot and served from the DB. The tier→model map now lives on the model NODES (`"tier": "coding"` — see [Model Tiers](/Doc/AI/ModelTiers)); the `ModelTier:Heavy/Standard/Light/Utility` keys are the deprecated shim, still read so an existing deployment keeps its mapping. The AKS overlay (`deploy/aks/values.aks.yaml`) sets:
 
 ```text
 AzureFoundry__Endpoint = https://<foundry-account>.services.ai.azure.com/models
 AzureFoundry__Models__0/1/2 = DeepSeek-V4-Pro, DeepSeek-V3-0324, DeepSeek-V4-Flash
-ModelTier__Heavy/Standard/Light/Utility = V4-Pro / V3-0324 / V4-Flash / V4-Flash
+AI__Tiers__coding/reasoning/chat/utility = V4-Pro / V3-0324 / V4-Flash / V4-Flash
 ClaudeCode__ConfigDirRoot = /mnt/users
 ```
 
@@ -63,7 +63,7 @@ same lists differently (policy `model-settings-seed-and-ceiling`, see [Policy No
 |---|---|---|
 | A model the record names | seeded, and always offered | seeded; the instance's administrator may switch it off |
 | A model the record does not name | pruned from the record's providers | refused when a person writes it, hidden, skipped, and refused by a round |
-| The model per tier | labels, then the record's seed for the tier node (`AI__Tiers__{tier id}`, then the deprecated `ModelTier__*`) | the instance's choice on the tier node, within the ceiling, then labels, then the record's seed for the tier node |
+| The model per tier | labels, then the record's seed for the tier node (`AI__Tiers__{tier id}`) | the instance's choice on the tier node, within the ceiling, then labels, then the record's seed for the tier node |
 | The record drops a model | its node is pruned | the same, and an instance choice that named it is clamped back to the record's seed |
 
 The key is reserved for the typed fields: an `extraPortalConfig` entry cannot impose a ceiling a record
