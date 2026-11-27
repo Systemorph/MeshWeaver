@@ -238,6 +238,36 @@ def without_comments(text: str) -> str:
     already tolerate it, and cutting at a `#` would truncate a value that legitimately contains one."""
     return "\n".join("" if COMMENT_LINE_RE.match(line) else line for line in text.splitlines())
 
+
+# 🚨 AN OVERLAY THAT DECLARES ITSELF NOT INSTALLED (MeshWeaver#7991). Several overlays are prepared and
+# committed ahead of their install, which is a cluster mutation of its own (an ApplyChart
+# InstanceAction the owner approves) — never a merge. Their header says so in the first words of a
+# comment line: `# NOT INSTALLED by a merge. …` / `# NOT INSTALLED. …`. Nothing consumes the image they
+# pin until that install, so an image that was never mirrored (the registry has no pull-through cache)
+# is not a lost image: it is one that has not been needed yet. The lane used to red every night on it
+# (`dockerhub/tailscale/tailscale:v1.104.4`), which is a red nobody can act on before the install.
+#
+# The marker is READ, never assumed: it must open a comment line inside the file's LEADING comment
+# block (a phrase deep in the file, or mid-sentence, declares nothing), and it covers ONLY the
+# "does not resolve" blocker of that overlay's own pins. What resolves is still locked, a pin shared
+# with an installed overlay still blocks, and the skip is PRINTED with the overlay path. Installing
+# the overlay means deleting that header line — the next run then checks its pins again like any other.
+NOT_INSTALLED_RE = re.compile(r"^[ \t]*#[ \t]*NOT INSTALLED\b")
+
+
+def declared_not_installed(text: str) -> str | None:
+    """The marker line when the overlay's leading comment block opens a line with `NOT INSTALLED`,
+    else None. Only the leading block is read: it ends at the first line that is neither blank nor a
+    comment."""
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if not COMMENT_LINE_RE.match(line):
+            return None
+        if NOT_INSTALLED_RE.match(line):
+            return line.strip().lstrip("#").strip()
+    return None
+
 # A `${{ … }}` / `{{ … }}` value is a template, not a pin.
 TEMPLATED_RE = re.compile(r"\{\{")
 
@@ -994,6 +1024,8 @@ class OverlayScan:
     # printed only when it sits under one of those in its own repository (#7724 review).
     overlay_paths: list[str] = field(default_factory=list)
     fleet_config_paths: list[str] = field(default_factory=list)
+    # (overlay path, its marker line) — an overlay whose header declares it NOT INSTALLED.
+    not_installed: list[tuple[str, str]] = field(default_factory=list)
     unreadable: str | None = None
 
 
@@ -1068,6 +1100,8 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
                 scan.sources.extend((name, url, path) for name, url in sources)
         else:
             scan.overlay_paths.append(path)
+            if (marker := declared_not_installed(text)) is not None:
+                scan.not_installed.append((path, marker))
             scan.overlay_operators.extend(
                 (repo, path) for repo in extract_overlay_operator_repositories(text, registry))
         scan.pins.extend((repo, tag, path) for repo, tag in pins)
@@ -1116,6 +1150,8 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
                 scan.sources.extend((name, url, rel) for name, url in sources)
         else:
             scan.overlay_paths.append(rel)
+            if (marker := declared_not_installed(text)) is not None:
+                scan.not_installed.append((rel, marker))
             scan.overlay_operators.extend(
                 (repo, rel) for repo in extract_overlay_operator_repositories(text, registry))
         scan.pins.extend((repo, tag, rel) for repo, tag in pins)
@@ -1675,6 +1711,11 @@ class Plan:
     axis1_image_repos: int = 0        # repositories that NAME a platform image without pinning one
     axis2_sites: int = 0
     axis2_pairs: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+    # "<repo> <overlay path>" -> marker line, for every overlay that declares itself NOT INSTALLED.
+    not_installed_sources: dict[str, str] = field(default_factory=dict)
+    # One line per pin that does not resolve and was NOT made a blocker because every overlay naming
+    # it declares itself not installed. Printed, never silent.
+    skipped_not_installed: list[str] = field(default_factory=list)
     # The TAG half: a reference that must keep RESOLVING, which is a different object from the
     # manifest it resolves to and carries its own lock attribute.
     wanted_tags: list[WantedTag] = field(default_factory=list)
@@ -1752,6 +1793,8 @@ def build_plan(axis1: list, axis2: list[OverlayScan]) -> Plan:
     # ---- axis 2: a tag pin. Its digest needs the registry, so it is only COLLECTED here. -------
     axis2_sites = 0
     for scan in axis2:
+        for path, marker in scan.not_installed:
+            plan.not_installed_sources[f"{scan.gh_repo} {path}"] = marker
         for acr_repo, tag, where in scan.pins:
             axis2_sites += 1
             plan.axis2_pairs.setdefault((acr_repo, tag), []).append(f"{scan.gh_repo} {where}")
@@ -2861,6 +2904,18 @@ def resolve_and_classify(plan: Plan, registry: Registry,
             if detail.startswith("INDETERMINATE"):
                 entry.problem = (f"could not determine whether {acr_repo}:{tag} exists — {detail}. "
                                  "Indeterminate is not a pass and it is not 'gone' either.")
+            elif wheres and all(where in plan.not_installed_sources for where in wheres):
+                # Every overlay naming this pin declares itself NOT INSTALLED: nothing consumes the
+                # image before that install, so its absence is not a lost image (#7991). Said, not
+                # silent — and never for a pin an installed overlay also names.
+                plan.skipped_not_installed.append(
+                    f"{acr_repo}:{tag} does not resolve in the registry — SKIPPED, not a blocker: "
+                    + "; ".join(f"{where} declares itself NOT INSTALLED "
+                                f"(\u201c{plan.not_installed_sources[where][:80]}\u201d)"
+                                for where in wheres)
+                    + ". Remove that header line when the overlay is installed and this pin is "
+                    "checked again.")
+                continue
             else:
                 entry.problem = (
                     f"{acr_repo}:{tag} does not resolve in the registry, so there is nothing to "
@@ -3246,6 +3301,8 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
         emit(f"               {entry.problem}")
         for source in entry.sources:
             emit(f"               ← {source}")
+    for line in plan.skipped_not_installed:
+        emit(f"  NOT INSTALLED  {line}")
     for gh_repo, repo, tag, where in floating:
         emit(f"  FLOATING   {repo}:{tag}  ← {gh_repo} {where}")
         emit("               a moving tag has no fixed manifest to protect; not locked.")
@@ -6268,6 +6325,8 @@ def _scan2(gh_repo: str, text: str, where: str = "deployments/aks/x/values.x.yam
     scan.floating = [(repo, tag, where) for repo, tag in floating]
     scan.instances = [(ident, host, where) for ident, host in extract_overlay_instances(text)]
     scan.overlay_paths = [where] if is_overlay_path(where) else []
+    if is_overlay_path(where) and (marker := declared_not_installed(text)) is not None:
+        scan.not_installed = [(where, marker)]
     # Mirrors both production scanners — ARM 29 compares the call lists, and an out-of-scope arm
     # driven over a harness that never extracts a foreign pin would be about nothing.
     scan.foreign = [(host, repo, tag, where)
@@ -6606,6 +6665,67 @@ def self_test() -> int:
                        ("whisper-swiss-german", "1.7.4"): (WHISPER, "")}))
     check(any("Indeterminate is not a pass" in b for b in plan.blockers),
           "ARM 8b: an INDETERMINATE registry answer was smoothed into a verdict")
+
+    # ── ARM 8d: an overlay that declares itself NOT INSTALLED does not red the lane (#7991) ──────
+    # The image is pinned in an overlay prepared ahead of its install and never mirrored, so the tag
+    # does not resolve. INSTALLED overlay ⇒ red (above); NOT INSTALLED overlay ⇒ said and skipped;
+    # and the moment the header line goes, the very same pin is red again.
+    TAILSCALE = """
+image:
+  repository: meshweaver.azurecr.io/dockerhub/tailscale/tailscale
+  tag: "v1.104.4"
+"""
+    HEADER = "# Grafana on the private network.\n#\n# NOT INSTALLED by a merge. Installing it is a cluster mutation.\n\n"
+    where_ni = "deployments/aks/control/tailnet/values.control.yaml"
+    where_in = "deployments/aks/control/other/values.control.yaml"
+    base = _scan2("Systemorph/Memex", FIXTURE_OVERLAY)   # the installation AXIS 3 needs
+    TS_DIGEST = "sha256:" + "9" * 64
+
+    plan, _, _ = _drive(axis1, [base, _scan2("Systemorph/Memex", HEADER + TAILSCALE, where_ni)],
+                        FakeRegistry(_inventory(), FAKE_TAGS))
+    check(not any("tailscale" in b for b in plan.blockers),
+          f"ARM 8d: a NOT INSTALLED overlay's unresolvable pin still reds the lane: {plan.blockers}")
+    check(any("tailscale" in line and "NOT INSTALLED" in line for line in plan.skipped_not_installed),
+          "ARM 8d: the skip was silent — it must be printed, naming the overlay and the marker")
+    check(not any(w.problem for w in plan.wanted if "tailscale" in w.acr_repo),
+          "ARM 8d: the skipped pin is still carried as an UNPROTECTABLE entry")
+
+    plan, _, _ = _drive(axis1, [base, _scan2("Systemorph/Memex", TAILSCALE, where_in)],
+                        FakeRegistry(_inventory(), FAKE_TAGS))
+    check(any("tailscale" in b and "does not resolve" in b for b in plan.blockers),
+          "ARM 8d: an INSTALLED overlay (no marker) no longer reds on an unresolvable pin — the "
+          "guard went blind for every overlay")
+    check(not plan.skipped_not_installed, "ARM 8d: an installed overlay was reported as skipped")
+
+    # The marker is read from the LEADING comment block only: a phrase mid-file declares nothing.
+    plan, _, _ = _drive(axis1, [base, _scan2("Systemorph/Memex",
+                                       TAILSCALE + "\n# NOT INSTALLED in prose, deep in the file\n",
+                                       where_in)],
+                        FakeRegistry(_inventory(), FAKE_TAGS))
+    check(any("tailscale" in b for b in plan.blockers),
+          "ARM 8d: a NOT INSTALLED phrase after the first key exempted the overlay")
+    plan, _, _ = _drive(axis1, [base, _scan2("Systemorph/Memex",
+                                       "# the NOT INSTALLED chart of last year was removed\n" + TAILSCALE,
+                                       where_in)],
+                        FakeRegistry(_inventory(), FAKE_TAGS))
+    check(any("tailscale" in b for b in plan.blockers),
+          "ARM 8d: a comment that merely mentions NOT INSTALLED exempted the overlay")
+
+    # A pin an INSTALLED overlay also names still reds, whatever the other overlay says.
+    plan, _, _ = _drive(axis1, [base, _scan2("Systemorph/Memex", HEADER + TAILSCALE, where_ni),
+                                _scan2("Systemorph/Memex", TAILSCALE, where_in)],
+                        FakeRegistry(_inventory(), FAKE_TAGS))
+    check(any("tailscale" in b for b in plan.blockers),
+          "ARM 8d: a pin shared with an installed overlay was skipped")
+
+    # What DOES resolve in a not-installed overlay is still protected, never skipped.
+    plan, _, registry = _drive(axis1, [base, _scan2("Systemorph/Memex", HEADER + TAILSCALE, where_ni)],
+                               FakeRegistry(_inventory(extra=[Manifest("dockerhub/tailscale/tailscale", TS_DIGEST, True, True, ["v1.104.4"])]),
+                                            {**FAKE_TAGS, ("dockerhub/tailscale/tailscale", "v1.104.4"): (TS_DIGEST, "")}))
+    check(not plan.skipped_not_installed and not any("tailscale" in b for b in plan.blockers),
+          f"ARM 8d: a not-installed overlay's RESOLVING pin was skipped or reded: {plan.blockers}")
+    check(("dockerhub/tailscale/tailscale", TS_DIGEST) in {(r, d) for r, d, _ in registry.writes},
+          "ARM 8d: a not-installed overlay's RESOLVING pin was not locked")
 
     # ── ARM 8c: the registry's OWN tag-absence answer is ABSENT, not INDETERMINATE (#7991) ──────
     # Drives the REAL `Registry.resolve_tag` (the fake above never reaches the az parsing), with
