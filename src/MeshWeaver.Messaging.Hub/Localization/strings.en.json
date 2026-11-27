@@ -2157,6 +2157,8 @@
   "imageCanvas.cornerTopRight": "Top-right corner of the crop",
   "imageCanvas.cornerBottomLeft": "Bottom-left corner of the crop",
   "imageCanvas.cornerBottomRight": "Bottom-right corner of the crop",
+  "imageCanvas.drawingSurface": "Drawing area — drag to draw with the selected tool; with Select, click a shape to select it",
+  "imageCanvas.selectedShape": "Shape selected — drag or use the arrow keys to move it, Delete removes it, Escape deselects",
   "ui.threadQueueAdminsOnly": "The thread queue lists threads of every partition, so only a platform admin can read it.",
   "ui.threadQueueTitle": "Thread queue",
   "ui.threadQueueCounts": "**{0}** running of a cap of **{1}** · **{2}** queued · {3}",

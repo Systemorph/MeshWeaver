@@ -2157,6 +2157,8 @@
   "imageCanvas.cornerTopRight": "Rechte obere Ecke des Zuschnitts",
   "imageCanvas.cornerBottomLeft": "Linke untere Ecke des Zuschnitts",
   "imageCanvas.cornerBottomRight": "Rechte untere Ecke des Zuschnitts",
+  "imageCanvas.drawingSurface": "Zeichenfläche — ziehen, um mit dem gewählten Werkzeug zu zeichnen; mit Auswählen eine Form anklicken, um sie auszuwählen",
+  "imageCanvas.selectedShape": "Form ausgewählt — ziehen oder Pfeiltasten zum Verschieben, Entf löscht, Esc hebt die Auswahl auf",
   "ui.threadQueueAdminsOnly": "Die Thread-Warteschlange listet Threads aller Partitionen, deshalb kann sie nur ein Plattform-Admin lesen.",
   "ui.threadQueueTitle": "Thread-Warteschlange",
   "ui.threadQueueCounts": "**{0}** laufen bei einer Obergrenze von **{1}** · **{2}** warten · {3}",
