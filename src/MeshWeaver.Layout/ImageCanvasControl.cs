@@ -265,7 +265,7 @@ public record ImageCanvasShape(string Kind, double X, double Y, double? X2 = nul
     }
 
     /// <summary>
-    /// The shape translated by (dx, dy), rounded to whole units, with the translation clamped so
+    /// The shape translated by (dx, dy), snapped to whole units (<see cref="ImageCanvasShapes.Snap"/>), with the translation clamped so
     /// its points stay on the picture (<c>[0, width] × [0, height]</c>). A point shape keeps only its
     /// anchor on the picture.
     /// </summary>
@@ -278,8 +278,8 @@ public record ImageCanvasShape(string Kind, double X, double Y, double? X2 = nul
     {
         var (minX, maxX) = IsPoint ? (X, X) : (Math.Min(X, X2!.Value), Math.Max(X, X2.Value));
         var (minY, maxY) = IsPoint ? (Y, Y) : (Math.Min(Y, Y2!.Value), Math.Max(Y, Y2.Value));
-        dx = Math.Round(Math.Clamp(dx, -minX, Math.Max(-minX, width - maxX)));
-        dy = Math.Round(Math.Clamp(dy, -minY, Math.Max(-minY, height - maxY)));
+        dx = ImageCanvasShapes.Snap(Math.Clamp(dx, -minX, Math.Max(-minX, width - maxX)));
+        dy = ImageCanvasShapes.Snap(Math.Clamp(dy, -minY, Math.Max(-minY, height - maxY)));
         return this with { X = X + dx, Y = Y + dy, X2 = X2 + dx, Y2 = Y2 + dy };
     }
 }
@@ -302,6 +302,15 @@ public static class ImageCanvasShapes
     /// <summary>The estimated width of one character as a fraction of the font size.</summary>
     public const double CharWidth = 0.6;
 
+    /// <summary>
+    /// Snaps a model coordinate to a whole unit, halves UP (<c>⌊v + ½⌋</c>) — exactly JavaScript's
+    /// <c>Math.round</c>, so the JS renderers and this rule agree on every value, midpoints included
+    /// (.NET's default <c>Math.Round</c> rounds halves to even).
+    /// </summary>
+    /// <param name="value">The coordinate in model units.</param>
+    /// <returns>The snapped coordinate.</returns>
+    public static double Snap(double value) => Math.Floor(value + 0.5);
+
     /// <summary>The topmost shape within <paramref name="tolerance"/> of a point — the LAST in the list, as it is drawn last.</summary>
     /// <param name="shapes">The shapes in drawing order.</param>
     /// <param name="x">The point's x in model units.</param>
@@ -318,7 +327,8 @@ public static class ImageCanvasShapes
 
     /// <summary>
     /// The shape a drawing tool makes from a gesture: a drag tool spans from the press to the
-    /// release, a text tool is anchored at the press. Points are clamped to the picture and rounded.
+    /// release, a text tool is anchored at the press. Points are clamped to the picture and snapped
+    /// (<see cref="Snap"/>); a drag whose points snap to the same one draws nothing.
     /// </summary>
     /// <param name="tool">The active tool.</param>
     /// <param name="x0">The press x in model units.</param>
@@ -327,15 +337,18 @@ public static class ImageCanvasShapes
     /// <param name="y1">The release y in model units.</param>
     /// <param name="width">The picture's width in model units.</param>
     /// <param name="height">The picture's height in model units.</param>
-    /// <returns>The new shape's geometry, or null when the tool draws nothing (Select, unknown).</returns>
+    /// <returns>The new shape's geometry, or null when the tool draws nothing (Select, unknown, or a degenerate drag).</returns>
     public static ImageCanvasShape? Draw(string? tool, double x0, double y0, double x1, double y1, double width, double height)
     {
-        double Cx(double v) => Math.Round(Math.Clamp(v, 0, width));
-        double Cy(double v) => Math.Round(Math.Clamp(v, 0, height));
+        double Cx(double v) => Snap(Math.Clamp(v, 0, width));
+        double Cy(double v) => Snap(Math.Clamp(v, 0, height));
         if (tool == ImageCanvasTool.Text)
             return new ImageCanvasShape(tool, Cx(x0), Cy(y0));
         if (tool is null || !ImageCanvasTool.DragTools.Contains(tool))
             return null;
-        return new ImageCanvasShape(tool, Cx(x0), Cy(y0), Cx(x1), Cy(y1));
+        var shape = new ImageCanvasShape(tool, Cx(x0), Cy(y0), Cx(x1), Cy(y1));
+        // A drag whose two points snap to the same one draws nothing: a zero-size box or zero-length
+        // segment would be an invisible shape that still hit-tests and fills the list.
+        return shape.X == shape.X2 && shape.Y == shape.Y2 ? null : shape;
     }
 }

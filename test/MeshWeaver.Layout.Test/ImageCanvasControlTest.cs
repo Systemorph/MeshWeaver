@@ -191,5 +191,20 @@ public class ImageCanvasControlTest(ITestOutputHelper output) : HubTestBase(outp
             .Should().Be(new ImageCanvasShape(ImageCanvasTool.Text, 21, 30));
         ImageCanvasShapes.Draw(ImageCanvasTool.Select, 0, 0, 10, 10, 400, 300).Should().BeNull();
         ImageCanvasShapes.Draw("Freehand", 0, 0, 10, 10, 400, 300).Should().BeNull("an unknown tool draws nothing rather than guessing");
+        ImageCanvasShapes.Draw(ImageCanvasTool.Rectangle, 10.2, 10.4, 9.8, 10.1, 400, 300)
+            .Should().BeNull("both points snap to (10,10): a zero-size box would be an invisible shape");
+        ImageCanvasShapes.Draw(ImageCanvasTool.Line, 10, 10, 10, 40, 400, 300)
+            .Should().NotBeNull("a vertical line has zero width but is not degenerate");
+    }
+
+    [Fact]
+    public void Snap_RoundsHalvesUp_LikeJavaScript()
+    {
+        ImageCanvasShapes.Snap(10.5).Should().Be(11, ".NET's default would give 10 (to even)");
+        ImageCanvasShapes.Snap(11.5).Should().Be(12);
+        ImageCanvasShapes.Snap(-0.5).Should().Be(0, "JS Math.round(-0.5) is -0");
+        ImageCanvasShapes.Snap(-1.5).Should().Be(-1, "JS Math.round(-1.5) is -1");
+        new ImageCanvasShape(ImageCanvasTool.Rectangle, 10, 10, 20, 20).Move(0.5, 0.5, 400, 300)
+            .Should().Be(new ImageCanvasShape(ImageCanvasTool.Rectangle, 11, 11, 21, 21));
     }
 }
