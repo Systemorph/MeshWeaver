@@ -117,16 +117,4 @@ public class MappedCollectionExposureTest(ITestOutputHelper output) : HubTestBas
         outcome.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
             "a read that carries no identity must be refused, never answered as an anonymous caller");
     }
-
-    [Fact(Timeout = 30000)]
-    public async Task AStampedCaller_IsHonoured_WithoutAnAmbientIdentity()
-    {
-        var owner = GetClient().Address;
-        var stamped = new MeshWeaver.Messaging.AccessContext { ObjectId = "stamped", Name = "Stamped" };
-
-        var found = await Mesh.GetOwnerCollectionConfig(owner, "attachments", TimeSpan.FromSeconds(20), stamped)
-            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
-
-        (found ?? throw new Xunit.Sdk.XunitException("a stamped caller must be enough to read")).Name.Should().Be("attachments");
-    }
 }

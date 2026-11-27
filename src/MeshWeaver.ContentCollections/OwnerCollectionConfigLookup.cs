@@ -17,21 +17,19 @@ public static class OwnerCollectionConfigLookup
     /// The configuration of <paramref name="collection"/> as the hub at <paramref name="owner"/> declares
     /// it, or <c>null</c> when that hub declares no such collection (or has no content handler, which
     /// answers nothing and surfaces as the timeout). Cold: the request is posted on Subscribe, under the
-    /// identity ambient then. A timeout or a delivery failure FAULTS — it is not "the node declares none",
+    /// identity ambient then (the portal's file browser subscribes under the circuit viewer). There is
+    /// deliberately NO parameter to stamp another identity: a stamped context on a delivery is taken at
+    /// face value inside the process, so this read speaks only as whoever is ambient, and the owning
+    /// hub's <c>[RequiresPermission(Read)]</c> gates it; a read with no identity at all is refused. A timeout or a delivery failure FAULTS — it is not "the node declares none",
     /// and the caller says which.
     /// </summary>
     /// <param name="issuer">The hub that posts the request (issued off the router).</param>
     /// <param name="owner">The address of the hub that owns the collection.</param>
     /// <param name="collection">The collection name.</param>
     /// <param name="timeout">How long the owner gets to answer.</param>
-    /// <param name="caller">
-    /// An identity to stamp on the read, or null for the ambient one. The read is gated by the owning
-    /// hub's <c>[RequiresPermission(Read)]</c> either way, and a read with NO identity at all is refused
-    /// (no silent anonymous read) — the portal's file browser subscribes under the circuit viewer.
-    /// </param>
     public static IObservable<ContentCollectionConfig?> GetOwnerCollectionConfig(
-        this IMessageHub issuer, Address owner, string collection, TimeSpan timeout, AccessContext? caller = null)
-        => ContentFileResolver.ObserveCollectionConfigs(issuer, owner, [collection], caller)
+        this IMessageHub issuer, Address owner, string collection, TimeSpan timeout)
+        => ContentFileResolver.ObserveCollectionConfigs(issuer, owner, [collection], caller: null)
             .Timeout(timeout)
             .Select(delivery => ContentFileResolver.ReadCollectionConfigs(delivery)?
                 .FirstOrDefault(c => string.Equals(c.Name, collection, StringComparison.Ordinal)));
