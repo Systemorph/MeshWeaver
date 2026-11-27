@@ -578,6 +578,29 @@ public sealed class InstanceAutoRegistrationService(
     }
 
     /// <summary>
+    /// The hold reason when <paramref name="exception"/> (or an inner one) is a refusal that is a
+    /// fact about the running platform — a package floor above it, or a module whose bytes do not
+    /// link against it — and <c>null</c> for every real failure. Pure.
+    /// </summary>
+    /// <param name="exception">What the install raised.</param>
+    internal static string? StandingPlatformHold(Exception exception)
+    {
+        for (var e = exception; e is not null; e = e.InnerException)
+        {
+            if (e is PackagePlatformFloorException or ModuleLandingRefusedException)
+                return e.Message;
+            // An aggregate is a hold only when EVERY inner is one: a real failure beside a hold
+            // must still be reported as a failure.
+            if (e is AggregateException aggregate)
+            {
+                var reasons = aggregate.InnerExceptions.Select(StandingPlatformHold).ToList();
+                return reasons.Count > 0 && reasons.All(r => r is not null) ? reasons[0] : null;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
     /// The registration pre-flight, as a PURE decision — every branch that decides whether this
     /// installation may present its bootstrap key is here, unit-testable with no mesh.
     ///
@@ -3489,6 +3512,26 @@ public sealed class InstanceAutoRegistrationService(
                         Skipped = [new DefaultInstallSkip(package.Id, exception.Message)],
                     });
                 }))
+            // 🚨 A refusal that is a fact about THIS platform — the version the source serves needs a
+            // newer one (PackagePlatformFloorException), or the module's bytes do not link against
+            // it (ModuleLandingRefusedException) — is a HOLD, not a failure: nothing was written, a
+            // retry on this platform changes nothing, and the platform roll lifts it. Reported as
+            // Failed it was an Error per package per boot on every instance behind the fleet
+            // (nine + eleven per boot on one local 4.0.14179 instance) plus the aggregate
+            // "reconciled with FAILURES" Error, none of it actionable but "update".
+            .Catch((Exception exception) => StandingPlatformHold(exception) is { } holdReason
+                ? Observable.Defer(() =>
+                {
+                    logger.LogWarning(
+                        "[DefaultInstall] {Id} is HELD, not installed — {Reason}. Not a failure: the "
+                        + "next pass re-derives it, and a platform roll lifts it.",
+                        package.Id, holdReason);
+                    return Observable.Return(DefaultInstallSummary.Empty with
+                    {
+                        Held = [new DefaultInstallHold(package.Id, holdReason)],
+                    });
+                })
+                : Observable.Throw<DefaultInstallSummary>(exception))
             .Catch((Exception exception) =>
             {
                 logger.LogError(exception,
@@ -4227,7 +4270,7 @@ public readonly record struct DefaultInstallSummary(
               + $"[{string.Join(", ", a.Select(x => $"{x.Package} ({x.InstalledBy})"))}]"
             : "")
         + (Held is { Count: > 0 } h
-            ? " — HELD (another writer owns the partition; re-derived next boot): "
+            ? " — HELD (another writer owns the partition, or the platform is older than the package needs; re-derived next boot): "
               + $"[{string.Join(", ", h.Select(x => x.Package))}]"
             : "")
         + (ModulesLanded is { Count: > 0 } m
