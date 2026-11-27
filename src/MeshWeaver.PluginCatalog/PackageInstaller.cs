@@ -4921,11 +4921,19 @@ public static class PackageInstaller
             // A Skill/Agent file the catch-all markdown parser swallowed: not parsed, not installed
             // (fb-1fa1722b). Recorded as AWAITING A PARSER — not unreadable: the same bytes install
             // once the parser is registered, so the record is partial and the next pass retries.
-            logger?.LogError("Package file not installed: {Problem}", unboundProblem);
+            // Tracked (awaitingParser): the record is stamped PARTIAL, the package-level Warning
+            // names the files and the next pass retries — a recoverable state, so Warning. Untracked
+            // it is dropped for good, which stays an Error.
             if (awaitingParser is not null)
+            {
+                logger?.LogWarning("Package file not installed: {Problem}", unboundProblem);
                 awaitingParser.Add(file.RelativePath);
+            }
             else
+            {
+                logger?.LogError("Package file not installed: {Problem}", unboundProblem);
                 unparsed?.Add(file.RelativePath);
+            }
             return null;
         }
         if (parsed is null)

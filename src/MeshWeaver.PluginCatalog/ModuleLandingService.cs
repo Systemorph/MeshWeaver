@@ -1513,7 +1513,7 @@ public sealed class ModuleLandingService : IDisposable
             {
                 logger?.LogWarning(e, "Module '{Name}': the refusal marker could not be written", name);
             }
-            throw new InvalidOperationException($"Module '{name}' refused: {held}");
+            throw new ModuleLandingRefusedException($"Module '{name}' refused: {held}");
         }
 
         ModuleLinkVerdict LinkVerdict()
@@ -2391,4 +2391,20 @@ public sealed record ModuleLandingOutcome(bool Held, string? HoldReason)
     /// when the shelf-only upload moved the fallback while the head does not load here, because boot
     /// then runs the fallback it names.</summary>
     public bool RestartRequired { get; init; }
+}
+
+/// <summary>
+/// A module landing was REFUSED at placement by the link probe — the bytes reference a platform
+/// surface this deployment does not provide (a module built for a newer platform on an older
+/// instance). Nothing landed and the refusal is recorded on the module's marker. A standing,
+/// platform-dependent fact, never an install FAILURE: the default install reports it as a hold,
+/// which the next pass re-derives (a platform roll lifts it).
+/// </summary>
+public sealed class ModuleLandingRefusedException : InvalidOperationException
+{
+    /// <summary>Initializes a new instance with the refusal <paramref name="message"/>.</summary>
+    /// <param name="message">The speaking refusal reason.</param>
+    public ModuleLandingRefusedException(string message) : base(message)
+    {
+    }
 }
