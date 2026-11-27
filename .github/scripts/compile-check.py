@@ -710,7 +710,7 @@ def discover_refs(refs_arg):
         # points at a FLAT assemblies dir (no src/*/bin layout), the other documented --refs usage.
         dlls = []
         for cfg in ("Debug", "Release"):
-            dlls = glob.glob(os.path.join(refs_arg, "*", "bin", cfg, "net11.0", "*.dll"))
+            dlls = glob.glob(os.path.join(refs_arg, "*", "bin", cfg, TARGET_FRAMEWORK, "*.dll"))
             if dlls:
                 break
         if not dlls:
@@ -747,7 +747,7 @@ def discover_refs(refs_arg):
         core_used = None
         for core in candidates:
             for cfg in ("Debug", "Release"):
-                dlls = glob.glob(str(core / "src" / "*" / "bin" / cfg / "net11.0" / "*.dll"))
+                dlls = glob.glob(str(core / "src" / "*" / "bin" / cfg / TARGET_FRAMEWORK / "*.dll"))
                 if dlls:
                     core_used = core
                     break
@@ -844,8 +844,25 @@ def short_reference_set_refusal(refs, layout: str, where: str = "the reference s
 # RolePlay/Story). A gate that is red on green main is a gate people learn to ignore.
 MODULE_REFS_NOT_IN_IMAGE = ("MeshWeaver.AI", "MeshWeaver.Markdown.Collaboration", "MeshWeaver.Maps")
 
+# The ONE target framework the build-output globs below (and run-node-tests.py's, which imports this
+# module) look under. It used to be a literal in a dozen places, so a framework bump left a stale
+# copy globbing the old folder and finding nothing.
+TARGET_FRAMEWORK = "net11.0"
 
-def discover_module_refs(search_roots, include_repo_build: bool = True):
+
+def sibling_plugins_checkouts(root=None):
+    """Candidate MeshWeaver.Plugins checkouts beside this one — where the registry-served module
+    projects (MODULE_REFS_NOT_IN_IMAGE) are built since they left core's src/. One list, shared by
+    discover_module_refs and run-node-tests.py's sibling_plugin_refs."""
+    root = Path(root) if root is not None else ROOT
+    return [
+        root.parent / "MeshWeaver.Plugins",
+        root.parent.parent / "MeshWeaver.Plugins",
+        Path(os.path.expanduser("~/code/MeshWeaver.Plugins")),
+    ]
+
+
+def discover_module_refs(search_roots, include_repo_build: bool = True, repo_root=None):
     """Locate the MODULE assemblies that are no longer in the platform image. CI supplies them in
        the flat `--refs` dir (unpacked from the run's module bundles); locally they come from this
        repo's own `src/<Module>/bin/{Release,Debug}/net11.0/`, since all three are built HERE.
@@ -873,8 +890,15 @@ def discover_module_refs(search_roots, include_repo_build: bool = True):
     if include_repo_build:
         for name in MODULE_REFS_NOT_IN_IMAGE:
             for cfg in ("Release", "Debug"):
-                for dll in glob.glob(str(ROOT / "src" / name / "bin" / cfg / "net11.0" / f"{name}.dll")):
+                for dll in glob.glob(str(ROOT / "src" / name / "bin" / cfg / TARGET_FRAMEWORK / f"{name}.dll")):
                     consider(dll, cfg == "Release")
+    # …and the sibling MeshWeaver.Plugins checkout, where these projects now live.
+    if include_repo_build:
+        for base in sibling_plugins_checkouts(repo_root):
+            for name in MODULE_REFS_NOT_IN_IMAGE:
+                for cfg in ("Release", "Debug"):
+                    for dll in glob.glob(str(base / "src" / name / "bin" / cfg / TARGET_FRAMEWORK / f"{name}.dll")):
+                        consider(dll, cfg == "Release")
     # …then anything the reference roots already carry (CI's flat dir, a sibling checkout's bins).
     for root in search_roots:
         if not root:
@@ -884,7 +908,7 @@ def discover_module_refs(search_roots, include_repo_build: bool = True):
             for dll in glob.glob(str(root / f"{name}.dll")):
                 consider(dll, True)
             for cfg in ("Release", "Debug"):
-                for dll in glob.glob(str(root / "**" / "bin" / cfg / "net11.0" / f"{name}.dll"),
+                for dll in glob.glob(str(root / "**" / "bin" / cfg / TARGET_FRAMEWORK / f"{name}.dll"),
                                      recursive=True):
                     consider(dll, cfg == "Release")
     # Absolutize — these become <HintPath>s in a csproj that `dotnet build` runs from a TEMP dir.
@@ -914,7 +938,7 @@ def discover_ai_refs(search_roots):
             continue
         root = Path(root)
         for cfg in ("Debug", "Release"):
-            for dll in glob.glob(str(root / "**" / "bin" / cfg / "net11.0" /
+            for dll in glob.glob(str(root / "**" / "bin" / cfg / TARGET_FRAMEWORK /
                                     "Microsoft.Extensions.AI*.dll"), recursive=True):
                 consider(dll, True)
         # a flat --refs directory
@@ -2178,6 +2202,24 @@ def _self_test() -> int:
         # RAR drops the reference silently (the whole reason discover_refs absolutizes too).
         if any(not os.path.isabs(v) for v in found.values()):
             failures.append("  module-refs discovery returned a RELATIVE path")
+        # Sibling-Plugins discovery: positive control (a built dll under a Plugins checkout is
+        # found) and negative control (a wrong-framework folder is not).
+        if True:  # scope for the controls below
+            fake_core = Path(tmp) / "work" / "MeshWeaver"
+            fake_core.mkdir(parents=True)
+            plug = Path(tmp) / "work" / "MeshWeaver.Plugins" / "src"
+            good = plug / "MeshWeaver.AI" / "bin" / "Release" / TARGET_FRAMEWORK
+            good.mkdir(parents=True)
+            (good / "MeshWeaver.AI.dll").write_bytes(b"")
+            wrong = plug / "MeshWeaver.Maps" / "bin" / "Release" / "net0.0"
+            wrong.mkdir(parents=True)
+            (wrong / "MeshWeaver.Maps.dll").write_bytes(b"")
+            found = discover_module_refs([], repo_root=fake_core)
+            if "MeshWeaver.AI.dll" not in found:
+                failures.append("  module-refs discovery missed MeshWeaver.AI.dll in a sibling "
+                                "MeshWeaver.Plugins checkout")
+            if "MeshWeaver.Maps.dll" in found:
+                failures.append("  module-refs discovery took a dll from a foreign target-framework folder")
 
 
     # 🚨 THE SCOPE MUST SELECT EXACTLY THE UNIT AND REFUSE EVERYTHING ELSE. `--modules` turns
@@ -3025,9 +3067,9 @@ def main() -> int:
                 "  them and --image alone cannot supply them. Every NodeType that binds one fails\n"
                 "  with CS0246/CS0103 naming the CONTENT — which reads as this repo breaking when\n"
                 "  the real fault is a short reference set. Refusing to report those as breaks.\n"
-                "\n  Build them once, then re-run this command:\n"
+                "\n  They are built in the sibling MeshWeaver.Plugins checkout (src/<Module>); build them\n  once, then re-run this command:\n"
               + "".join(
-                  f"    dotnet build src/{m} -c Release -p:MeshWeaverRoot=$HOME/code/MeshWeaver/\n"
+                  f"    dotnet build <MeshWeaver.Plugins>/src/{m} -c Release -p:MeshWeaverRoot=$HOME/code/MeshWeaver/\n"
                   for m in missing_modules)
               + "  (CI needs none of this: it unpacks the same assemblies from the run's module\n"
                 "  bundles and asserts each one — .github/workflows/ci.yml, 'Compile-check every\n"
