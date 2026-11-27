@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -71,5 +72,36 @@ public class MappedCollectionExposureTest(ITestOutputHelper output) : HubTestBas
 
         byName.Should().NotBeNull();
         byName!.ExposeInChildren.Should().BeTrue("the named lookup and the listing must agree");
+    }
+
+    /// <summary>The ambient identity a portal circuit carries when the browser asks (a post carries one or is refused).</summary>
+    private IDisposable AsViewer() =>
+        Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Messaging.AccessService>()
+            .SwitchAccessContext(new MeshWeaver.Messaging.AccessContext { ObjectId = "viewer", Name = "Viewer" });
+
+    [Fact(Timeout = 30000)]
+    public async Task TheOwnersConfiguration_IsFetchedByNameFromTheHubThatDeclaresIt()
+    {
+        var owner = GetClient().Address;
+        using var _ = AsViewer();
+
+        var declared = await Mesh.GetOwnerCollectionConfig(owner, "attachments", TimeSpan.FromSeconds(20))
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
+
+        declared.Should().NotBeNull("the owner declares it, so a client holding only the name can fetch it");
+        declared!.Name.Should().Be("attachments");
+        declared.BasePath.Should().EndWith(Path.Combine("attachments", "node1"));
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task AnOwnerThatDeclaresNoSuchCollection_AnswersNull()
+    {
+        var owner = GetClient().Address;
+        using var _ = AsViewer();
+
+        var missing = await Mesh.GetOwnerCollectionConfig(owner, "nonexistent", TimeSpan.FromSeconds(20))
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
+
+        missing.Should().BeNull("a collection the owner does not declare is not somebody else's files");
     }
 }
