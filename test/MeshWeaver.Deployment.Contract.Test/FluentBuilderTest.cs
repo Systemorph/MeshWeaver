@@ -140,7 +140,7 @@ public class FluentBuilderTest
         Assert.Equal("Eu", c["AI__RequiredDataResidency"]);
         Assert.Equal("Eu", c["Anthropic__DataResidency"]);
         Assert.Equal("ZDR", c["Anthropic__DataRetention"]);
-        Assert.Equal("Provider/OpenRouterEU/z-ai/glm-5.3", c["ModelTier__Heavy"]);
+        Assert.Equal("Provider/OpenRouterEU/z-ai/glm-5.3", c["AI__Tiers__coding"]);
         Assert.False(c.ContainsKey("OpenRouter__DataResidency"), "an unstated mark renders nothing");
 
         var endpoint = new DeploymentContent().WithAi(a => a.OpenRouterEU([], endpoint: " https://eu.openrouter.example/api/v1 "));
@@ -430,7 +430,7 @@ public class FluentBuilderTest
             var config = DeploymentPortalConfig.PortalConfig(governed, options);
             Assert.Equal(DeploymentPortalConfig.ModelGovernanceSeedAndCeiling, config[DeploymentPortalConfig.ModelGovernanceKey]);
             Assert.Equal("z-ai/glm-5.3", config["OpenRouterEU__Models__0"]);
-            Assert.Equal("Provider/OpenRouterEU/z-ai/glm-5.3", config["ModelTier__Heavy"]);
+            Assert.Equal("Provider/OpenRouterEU/z-ai/glm-5.3", config["AI__Tiers__coding"]);
         }
 
         // Negative controls: a record that is not customer-governed keeps the default reading (no key),

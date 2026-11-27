@@ -167,7 +167,7 @@ A stock **Aspire** deploy (`../MeshWeaver.Plugins/src/Memex.AppHost`) sets the c
 ```text
 Anthropic__Endpoint, Anthropic__ApiKey, Anthropic__Models__0..2   (= ModelTier heavy/standard/light)
 AzureFoundry__Endpoint, AzureFoundry__ApiKey                       (open-weight /models gateway)
-ModelTier__Heavy / __Standard / __Light / __Utility
+AI__Tiers__coding / __reasoning / __chat / __utility
 ```
 
 > The AppHost currently emits these multi-model keys as `AzureAIS__*`, which **nothing binds** (the code reads the `AzureFoundry:` section) — a latent bug. Use `AzureFoundry__*`, as the Helm chart does.

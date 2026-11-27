@@ -917,8 +917,8 @@ public sealed record ModelTiers
 
     /// <summary>
     /// The legacy rank names this record still carries — what the alias removal has to sweep first. Pure.
-    /// Counts every STORED alias, a blank one included: the record keeps it at rest and the renderer
-    /// still emits its raw <c>ModelTier__*</c> key, so it is still a dependency to sweep. (Resolution,
+    /// Counts every STORED alias, a blank one included: the record keeps it at rest, so it is still
+    /// a dependency to sweep. (Resolution,
     /// in <see cref="Model"/>, treats a blank as unset — a different question.)
     /// </summary>
     /// <returns>The camelCase field names (<c>heavy</c>, <c>standard</c>, <c>light</c>) that are present.</returns>

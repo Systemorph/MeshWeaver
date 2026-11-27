@@ -5089,8 +5089,8 @@ public static class PackageInstaller
             .FirstAsync().Select(d => d.Message)
             .SelectMany(resp => resp.Success
                 ? Observable.Return(1)
-                : Observable.Throw<int>(new InvalidOperationException(
-                    $"Install of '{node.Path}' failed: {resp.Error}")));
+                : Observable.Throw<int>(NodeTypeNotRegisteredException.TryFrom(node.Path, resp.Error)
+                    ?? new InvalidOperationException($"Install of '{node.Path}' failed: {resp.Error}")));
 
     // Parse one package file into a node rebased under the target partition (mirrors
     // GitHubSyncService.ParseFile). The package.json manifest is filtered out before this.
