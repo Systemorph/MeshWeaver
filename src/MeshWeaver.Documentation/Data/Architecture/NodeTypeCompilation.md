@@ -3679,9 +3679,15 @@ the name finds nothing and reads as "no such instrument". Two ways its silence m
 
 - **It is registered only `if (gateBake)`.** With readiness gating off the check is not present at
   all, and `/health` names no NodeType because none was asked for — not because none failed.
-- **`GateReadiness=true` with `DynamicTypes=false` is registered, permanently green, and protects
-  nothing** (the gate reads bake state that only the sweep writes, and the sweep never runs). The
-  two PreWarm keys are one setting; the host's own comment says so.
+- ~~`GateReadiness=true` with `DynamicTypes=false` is registered, permanently green~~ — **retired
+  2026-11-27 (owner: "we must bake at build").** With the sweep off, an armed gate certifies the
+  ADOPTION of the CI-built bundles (`NodeTypeBakeGateState.ApplyAdoption`): it is Running while the
+  bundles are seeded and probed, Complete when every gate-relevant dynamic type arrived as an adopted
+  bundle, and Faulted (unproven, so `PreWarm:AllowUnprovenBake` and a served-build witness relax it)
+  when a type a previous image served has no CI-built bundle on this one. Nothing compiles at boot.
+  The canonical configuration is therefore `GateReadiness=true`, `DynamicTypes=false`; the sweep
+  (`DynamicTypes=true`) is for authoring NodeTypes locally and for the build host that produces the
+  bundles.
 
 So before trusting a green `nodetype_bake`, confirm the check is REGISTERED **and** ARMED — the
 payload must name a positive count of types it actually enumerated. A verdict with no denominator is
