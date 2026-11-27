@@ -662,8 +662,9 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     ///
     /// <para>The same population and the same exemptions the sweep's gate uses
     /// (<see cref="NodeTypeBakeReport.GateRelevant"/>): a type that was already broken, a first-ever
-    /// bake (nothing to protect — <see cref="DynamicTypePreWarmer.IsFirstBake"/>), and an image that
-    /// has already served here never hold a roll. What is left is a type a prior image served and
+    /// bake (every type NeverBuilt, so no type has a working build to regress from - see
+    /// <see cref="NodeTypeBakeEntry.HadWorkingBuild"/> and <see cref="DynamicTypePreWarmer.IsFirstBake"/>),
+    /// and an image that has already served here never hold a roll. What is left is a type a prior image served and
     /// this image's CI did not deliver a build for — and that holds the roll, because lazily
     /// compiling it in production is exactly what the directive retires.</para>
     ///
@@ -679,7 +680,7 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     {
         var gating = report.GateRelevant;
         var adopted = report.Entries.Count(e => !e.NeedsBake);
-        if (gating.Count == 0 || DynamicTypePreWarmer.IsFirstBake(report))
+        if (gating.Count == 0)
         {
             MarkComplete(
                 $"adopted the prebuilt bundles in {elapsed:hh\\:mm\\:ss} — adopted={adopted} "
