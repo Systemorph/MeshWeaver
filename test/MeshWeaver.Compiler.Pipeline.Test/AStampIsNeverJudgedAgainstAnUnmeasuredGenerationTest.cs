@@ -118,4 +118,43 @@ public class AStampIsNeverJudgedAgainstAnUnmeasuredGenerationTest
                 moduleVersion: (null, false), Stamp)
             .Should().BeNull("nothing moved and nothing was measured: no write, the fingerprint still describes the snapshot");
     }
+
+    /// <summary>A record that already reads AdoptedVerified over a producer fingerprint the live
+    /// source no longer has: the live shape of the Crm 4.2 incident, where the old build kept
+    /// serving, IsDirty=false, and every release was "satisfied by the existing build".</summary>
+    private static NodeTypeDefinition VerifiedThenMoved() => AdoptedFromN() with
+    {
+        RequestedSourceStampAt = null,
+        CompiledSources = SnapshotN,
+        BuildProvenance = BuildProvenance.AdoptedVerified,
+        CurrentSourceFingerprint = FingerprintN1,
+    };
+
+    [Fact]
+    public void AVerifiedAdoptionWhoseLiveFingerprintMoved_IsRejudgedAndRefused()
+    {
+        var current = VerifiedThenMoved();
+        NodeTypeCompilationHelpers.ContradictsLiveSource(current).Should().BeTrue();
+
+        var judged = NodeTypeCompilationHelpers.PublishSourceSnapshot(
+            current, SnapshotN, FingerprintN1, includes: ImmutableList<string>.Empty,
+            moduleVersion: (null, false), Stamp);
+
+        judged.Should().NotBeNull("the contradiction is a write, never a no-op");
+        judged!.BuildProvenance.Should().NotBe(BuildProvenance.AdoptedVerified);
+        judged.IsDirty.Should().BeTrue("the record must not claim the old bytes are current");
+        NodeTypeCompilationHelpers.ContradictsLiveSource(judged).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Control_AVerifiedAdoptionWhoseFingerprintMatches_IsNotContradictedAndWritesNothing()
+    {
+        var current = VerifiedThenMoved() with { CurrentSourceFingerprint = FingerprintN };
+        NodeTypeCompilationHelpers.ContradictsLiveSource(current).Should().BeFalse();
+
+        NodeTypeCompilationHelpers.PublishSourceSnapshot(
+                current, SnapshotN, FingerprintN, includes: null,
+                moduleVersion: (null, false), Stamp)
+            .Should().BeNull("a matching verified adoption is left alone");
+    }
 }
