@@ -215,18 +215,17 @@ public sealed class NodeTypeAdoptionRegistry
     /// The stamp this process wrote for <paramref name="nodeTypePath"/> when <paramref name="current"/>
     /// has not moved on from the build that adoption installed — judged by IDENTITY, never by node version.
     ///
-    /// <para>🚨 <b>Why the version is the wrong witness here</b> (measured on a client portal's 4.0.14338
-    /// pod). <see cref="StampSuperseding"/> answers "does this snapshot predate the adoption?", which
-    /// is true only until the adoption's OWN write lands: that write bumps the node past
+    /// <para><b>Why the version is the wrong witness here.</b>
+    /// <see cref="StampSuperseding"/> answers "does this snapshot predate the adoption?", which is
+    /// true only until the adoption's OWN write lands: that write bumps the node past
     /// <see cref="AdoptedStamp.ObservedVersion"/>, so every read of the record taken after an admitted
     /// adoption reads "not covered", and so does any later bookkeeping write (a Pending flip, a
-    /// release request, an adoption stamp). Eleven types adopted from a prebuilt bundle were parked
-    /// milliseconds later by the untracked-module gate for exactly that reason.</para>
+    /// release request, an adoption stamp).</para>
     ///
     /// <para>The question the gate needs answered is "is the build this process adopted still the
     /// build the record names?". It is: the record carries the stamped build's collection, path,
     /// compiled version (and MVID when the stamp has one), under the live framework. Bookkeeping
-    /// writes leave those alone. 🚨 What does NOT leave them alone — and so is never covered — is a
+    /// writes leave those alone. What does NOT leave them alone — and so is never covered — is a
     /// real change: a different build (a compile or a later adoption replaced the coordinates), a
     /// FORCED release (the operator asked for the live source), or source whose fingerprint moved past
     /// the one the bytes were built from.</para>
@@ -245,6 +244,11 @@ public sealed class NodeTypeAdoptionRegistry
             return null;
         if (current.RequestedReleaseForce)
             return null;
+        // Every compile and every adoption stamps CompiledFrameworkVersion with the LIVE framework
+        // (the framework identity is fixed for the process), so a newer build can only appear under
+        // the live framework; a foreign-framework record is the previous platform's build or a write
+        // composed from an older read. A framework rollback is excluded by the adopted-framework
+        // check above: a stamp adopted under another framework is never covered here.
         // A DIFFERENT build under the live framework is a newer build (a compile or a later adoption
         // replaced this one) and wins. A record that names NO build, or one of another framework, is
         // not evidence of anything newer: a write composed from an older read of the record (a Pending
@@ -255,7 +259,11 @@ public sealed class NodeTypeAdoptionRegistry
             && (!string.Equals(current.LatestAssemblyCollection, adopted.LatestAssemblyCollection, StringComparison.Ordinal)
                 || !string.Equals(current.LatestAssemblyPath, adopted.LatestAssemblyPath, StringComparison.Ordinal)
                 || current.LastCompiledVersion != adopted.LastCompiledVersion
+                // The path is content-addressed, so equal collection + path + compiled version name the
+                // same bytes; the MVID is a corroboration. A record that LOST its MVID (a partial
+                // clobber) is not a different build — only a present, different MVID is.
                 || (adopted.LatestAssemblyMvid is { Length: > 0 }
+                    && current.LatestAssemblyMvid is { Length: > 0 }
                     && !string.Equals(current.LatestAssemblyMvid, adopted.LatestAssemblyMvid, StringComparison.Ordinal))))
             return null;
         // A real source change: the live sources' fingerprint moved past the one these bytes were

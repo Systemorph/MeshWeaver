@@ -205,6 +205,10 @@ public class AnAdoptionIsCoveredByIdentityNotByVersionTest(ITestOutputHelper out
         registry.StampNaming("T/A", stamp with { LatestAssemblyPath = "other.dll" }, Live)
             .Should().BeNull("a compile or a later adoption replaced the build under the live framework");
         registry.StampNaming("T/A", stamp with { LastCompiledVersion = 39 }, Live).Should().BeNull();
+        registry.StampNaming("T/A", stamp with { LatestAssemblyMvid = "2222eeee2222eeee" }, Live)
+            .Should().BeNull("a present, different MVID is a different build");
+        registry.StampNaming("T/A", stamp with { LatestAssemblyMvid = null }, Live)
+            .Should().NotBeNull("a record that lost its MVID is a partial clobber, not a different build");
         registry.StampNaming("T/A", stamp with { RequestedReleaseForce = true }, Live)
             .Should().BeNull("a forced release asks for the live source");
         registry.StampNaming("T/A", stamp with { CurrentSourceFingerprint = "moved" }, Live)
