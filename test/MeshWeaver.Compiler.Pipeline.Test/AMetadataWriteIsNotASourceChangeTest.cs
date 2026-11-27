@@ -49,6 +49,12 @@ public class AMetadataWriteIsNotASourceChangeTest
         };
     }
 
+    /// <summary>The recorded version of the one source; a record without it is a broken fixture.</summary>
+    private static long VersionOf(NodeTypeDefinition def) =>
+        def.CurrentSourceVersions is { } versions && versions.TryGetValue(Path, out var v)
+            ? v
+            : throw new InvalidOperationException("the fixture record carries no version for " + Path);
+
     [Fact]
     public void ADescriptionWrite_KeepsTheRecordedVersion()
     {
@@ -58,7 +64,7 @@ public class AMetadataWriteIsNotASourceChangeTest
             [Source("class A {}", T0.AddMinutes(3), description: "an AI description")],
             def.CurrentSourceVersions, def.CurrentSourceDigests);
 
-        Assert.Equal(def.CurrentSourceVersions![Path], versions[Path]);
+        Assert.Equal(VersionOf(def), versions[Path]);
         Assert.Equal(def.CurrentSourceDigests, digests);
     }
 
@@ -72,7 +78,7 @@ public class AMetadataWriteIsNotASourceChangeTest
             def.CurrentSourceVersions, def.CurrentSourceDigests);
 
         Assert.Equal(T0.AddMinutes(3).UtcTicks, versions[Path]);
-        Assert.NotEqual(def.CurrentSourceVersions![Path], versions[Path]);
+        Assert.NotEqual(VersionOf(def), versions[Path]);
     }
 
     [Fact]
@@ -92,7 +98,7 @@ public class AMetadataWriteIsNotASourceChangeTest
             Content = new CodeConfiguration { Code = "class A {}", LastExecutedAt = T0, LastExecutedBy = "someone" },
         };
         var (kept, _) = SourceVersionCarry.Fold([executedOnly], def.CurrentSourceVersions, def.CurrentSourceDigests);
-        Assert.Equal(def.CurrentSourceVersions![Path], kept[Path]);
+        Assert.Equal(VersionOf(def), kept[Path]);
     }
 
     [Fact]
@@ -132,7 +138,7 @@ public class AMetadataWriteIsNotASourceChangeTest
             [Source("class A {}", T0.AddMinutes(3)), added], def.CurrentSourceVersions, def.CurrentSourceDigests);
 
         Assert.Equal(T0.AddMinutes(1).UtcTicks, versions["P/App/Source/b"]);
-        Assert.Equal(def.CurrentSourceVersions![Path], versions[Path]);
+        Assert.Equal(VersionOf(def), versions[Path]);
     }
 
     [Fact]
