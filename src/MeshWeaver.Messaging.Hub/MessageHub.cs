@@ -517,27 +517,29 @@ public sealed class MessageHub : IMessageHub
         // ref the abandoned hub is collectable; the scanner observes it dead on the next
         // tick and self-disposes. A LIVE hub is held by its real owners (parent
         // hosted-hubs / DI), so the weak ref always resolves while the hub matters.
-        var weakSelf = new WeakReference<MessageHub>(this);
-        var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
-        sub.Disposable = Observable
-            .Interval(StaleCallbackScanInterval)
-            .Subscribe(_ =>
-            {
-                if (!weakSelf.TryGetTarget(out var self))
-                {
-                    // Hub was collected (abandoned + GC'd). Stop the timer so the whole
-                    // scanner graph becomes unreachable. `sub` is captured directly, so
-                    // this needs no reference back to the (now-gone) hub.
-                    sub.Dispose();
-                    return;
-                }
-                self.ScanStaleCallbacks(thresholdMs);
-            });
+        // 🚨 ONE timer for ALL hubs (#5388): the registry holds this hub WEAKLY and ticks every
+        // hub on one pool item. A per-hub Observable.Interval was one Timer + one work item per hub
+        // per 5 s, phase-locked across a wave of activations.
+        var sub = StaleCallbackScanRegistry.Shared.Register(new StaleCallbackScanAdapter(this, thresholdMs));
         staleCallbackScannerSub = sub;
         // Also register in the disposables composite so a NORMAL teardown kills the
         // timer promptly (rather than waiting for the next tick after GC). Double-dispose
         // with the explicit Quiescing-phase dispose is harmless (Rx is idempotent).
         disposables.Add(GuardRegistrant(sub));
+    }
+
+    /// <summary>The registry's handle on a hub. Holds the hub WEAKLY (a diagnostic must never keep a hub alive) and is held strongly
+    /// by the registry, which drops it when the hub is disposed or collected.</summary>
+    private sealed class StaleCallbackScanAdapter(MessageHub hub, long thresholdMs) : IStaleCallbackScanTarget
+    {
+        private readonly WeakReference<MessageHub> weakHub = new(hub);
+
+        public bool ScanStaleCallbacks()
+        {
+            if (!weakHub.TryGetTarget(out var self)) return false;
+            self.ScanStaleCallbacks(thresholdMs);
+            return true;
+        }
     }
 
     /// <summary>Single scan tick — extracted so the timer closure captures only a
