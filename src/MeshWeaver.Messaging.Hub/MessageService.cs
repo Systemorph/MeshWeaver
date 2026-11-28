@@ -1845,9 +1845,15 @@ public class MessageService : IMessageService
     // scheduler — only a hub on TaskScheduler.Default moves.
     /// <summary>The scheduler this pump's drains run on right now — named in the pump verdict.</summary>
     internal string DrainSchedulerName =>
-        disposalLane is { } lane ? "disposal-lane(" + lane.GetType().Name + ")"
+        disposalLane is { } lane ? "disposal-lane(" + lane.GetType().Name + "; " + DescribeLaneState() + ")"
             : turnScheduler.GetType().Name + (ReferenceEquals(turnScheduler, TaskScheduler.Default)
                 ? "(pool, no disposal lane resolved)" : "");
+
+    private string DescribeLaneState()
+    {
+        try { return disposalDrain?.DescribeState() ?? "no lane state"; }
+        catch { return "lane state unreadable"; }
+    }
 
     internal void BeginDisposal()
     {
