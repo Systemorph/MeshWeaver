@@ -142,9 +142,9 @@
         ]
       },
       "tiers": {
-        "heavy": "moonshotai/kimi-k3",
-        "standard": "z-ai/glm-5.3",
-        "light": "qwen/qwen3.6-35b-a3b",
+        "coding": "moonshotai/kimi-k3",
+        "reasoning": "z-ai/glm-5.3",
+        "chat": "qwen/qwen3.6-35b-a3b",
         "utility": "z-ai/glm-5.3"
       }
     },

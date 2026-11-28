@@ -165,18 +165,18 @@ Each provider package self-registers its config section via `AddLanguageModelCat
 A stock **Aspire** deploy (`../MeshWeaver.Plugins/src/Memex.AppHost`) sets the catalog env vars, so the system catalog populates out of the box:
 
 ```text
-Anthropic__Endpoint, Anthropic__ApiKey, Anthropic__Models__0..2   (= ModelTier heavy/standard/light)
+Anthropic__Endpoint, Anthropic__ApiKey, Anthropic__Models__0..2   (= the coding/reasoning/chat tiers)
 AzureFoundry__Endpoint, AzureFoundry__ApiKey                       (open-weight /models gateway)
 AI__Tiers__coding / __reasoning / __chat / __utility
 ```
 
 > The AppHost currently emits these multi-model keys as `AzureAIS__*`, which **nothing binds** (the code reads the `AzureFoundry:` section) — a latent bug. Use `AzureFoundry__*`, as the Helm chart does.
 
-The **Helm / AKS** chart (`deploy/helm`, `deploy/aks/values.aks.yaml`) is a *different* path and currently templated only `MEMEX_*`, `Deployment__*`, `Storage__*`, `Graph__*`, `Mcp__BaseUrl` in its portal ConfigMap — **no `Anthropic__*` / `AzureFoundry__*` / `ModelTier__*` keys at all.** (This guide's deployment shipped that fix — the chart now templates them; older checkouts may not.) A portal deployed this way boots with zero AI provider config, so `BuiltInLanguageModelProvider` finds no signal and the picker is empty. This is the most common "no models in production" cause.
+The **Helm / AKS** chart (`deploy/helm`, `deploy/aks/values.aks.yaml`) is a *different* path and currently templated only `MEMEX_*`, `Deployment__*`, `Storage__*`, `Graph__*`, `Mcp__BaseUrl` in its portal ConfigMap — **no `Anthropic__*` / `AzureFoundry__*` / `AI__Tiers__*` keys at all.** (This guide's deployment shipped that fix — the chart now templates them; older checkouts may not.) A portal deployed this way boots with zero AI provider config, so `BuiltInLanguageModelProvider` finds no signal and the picker is empty. This is the most common "no models in production" cause.
 
 Two ways to fix an AKS deployment:
 
-1. **Config in the chart** — `deploy/helm/templates/memex-portal/config.yaml` templates the `Anthropic__*` / `AzureFoundry__*` / `ModelTier__*` keys and `secrets.yaml` the `Anthropic__ApiKey` / `AzureFoundry__ApiKey` / `Ai__KeyProtection__MasterKey` keys; `deploy/aks/values.aks.yaml` carries the AKS-correct values (key from Key Vault via the CSI Secrets Store add-on). Set the endpoint + key there and a fresh deploy self-populates the system catalog, matching Aspire.
+1. **Config in the chart** — `deploy/helm/templates/memex-portal/config.yaml` templates the `Anthropic__*` / `AzureFoundry__*` / `AI__Tiers__*` keys and `secrets.yaml` the `Anthropic__ApiKey` / `AzureFoundry__ApiKey` / `Ai__KeyProtection__MasterKey` keys; `deploy/aks/values.aks.yaml` carries the AKS-correct values (key from Key Vault via the CSI Secrets Store add-on). Set the endpoint + key there and a fresh deploy self-populates the system catalog, matching Aspire.
 2. **Author space/user provider nodes** — create `ModelProvider` + `LanguageModel` nodes directly (see [Set up a space provider](#set-up-a-space-provider)). This needs no redeploy and is how the Systemorph shared provider was set up; the key still has to be supplied (org key on the node, or per-user keys).
 
 ### EU-only processing: the keys the chart renders
@@ -222,7 +222,7 @@ The Systemorph deployments run their tiers on **open-weight** models — cheap, 
 | **`chat`** (legacy `light`) | `qwen/qwen3.6-35b-a3b` | the everyday round and most traffic — a fast MoE (~3B active) |
 | **`utility`** | `z-ai/glm-5.3` *(via the deployment default)* | high-volume background jobs |
 
-Put the tier on the model NODE (`"tier": "coding"`); leave `utility`/`reasoning` unlabelled so they fall through to the default (`z-ai/glm-5.3`). The full policy, the two-stage **Auto** router, and how an unlabelled tier resolves are in [Model Tiers](/Doc/AI/ModelTiers). The `ModelTier:Heavy/Standard/Light/Utility` config keys still work (mapped by rank) but are deprecated. On a laptop the same tiers point at a **local Ollama** qwen (a `Provider/OpenAICompatible` node at `localhost`) instead of OpenRouter — the payoff of keeping Auto on open weights.
+Put the tier on the model NODE (`"tier": "coding"`); leave `utility`/`reasoning` unlabelled so they fall through to the default (`z-ai/glm-5.3`). The full policy, the two-stage **Auto** router, and how an unlabelled tier resolves are in [Model Tiers](/Doc/AI/ModelTiers). The old `ModelTier:Heavy/Standard/Light/Utility` config keys are retired; set `AI__Tiers__{tier id}`. On a laptop the same tiers point at a **local Ollama** qwen (a `Provider/OpenAICompatible` node at `localhost`) instead of OpenRouter — the payoff of keeping Auto on open weights.
 
 > 🕰️ These previously ran on Azure AI Foundry (`DeepSeek-V4-Pro/V3-0324/V4-Flash`); the deployment moved to the OpenRouter open-weight set above (2026-08). The tier *mechanism* is unchanged — only the model ids behind the labels.
 

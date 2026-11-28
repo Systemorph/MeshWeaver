@@ -39,7 +39,7 @@ The model picker reads `ModelProvider` + `LanguageModel` mesh nodes. Create/patc
 
 ## Option B — Default static catalog via Helm config (needs redeploy)
 
-`BuiltInLanguageModelProvider` materialises a **default** catalog at `Provider/{provider}` + nested model children from config (`{Section}:Models` / `:Endpoint`) — imported into the top-level `Provider` partition on boot and served from the DB. The tier→model map now lives on the model NODES (`"tier": "coding"` — see [Model Tiers](/Doc/AI/ModelTiers)); the `ModelTier:Heavy/Standard/Light/Utility` keys are the deprecated shim, still read so an existing deployment keeps its mapping. The AKS overlay (`deploy/aks/values.aks.yaml`) sets:
+`BuiltInLanguageModelProvider` materialises a **default** catalog at `Provider/{provider}` + nested model children from config (`{Section}:Models` / `:Endpoint`) — imported into the top-level `Provider` partition on boot and served from the DB. The tier→model map now lives on the model NODES (`"tier": "coding"` — see [Model Tiers](/Doc/AI/ModelTiers)); the old `ModelTier:*` rank keys are retired (use `AI__Tiers__{tier id}`). The AKS overlay (`deploy/aks/values.aks.yaml`) sets:
 
 ```text
 AzureFoundry__Endpoint = https://<foundry-account>.services.ai.azure.com/models

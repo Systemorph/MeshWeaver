@@ -75,7 +75,7 @@ public class FluentBuilderTest
             .WithKeyVaultSecrets(s => s.Map("Email__ClientSecret", "email-clientsecret"))
             .WithSignIn(microsoftClientId: "client", microsoftTenantId: "tenant")
             .WithEmail(mailboxAddress: "portal@example.com")
-            .WithAi(a => a.OpenRouter(["anthropic/claude-sonnet-4"]).Tiers(heavy: "anthropic/claude-opus-4"))
+            .WithAi(a => a.OpenRouter(["anthropic/claude-sonnet-4"]).TierModels(coding: "anthropic/claude-opus-4"))
             .WithOperator(ns: "hosting")
             .WithStartupProbe(periodSeconds: 10, failureThreshold: 60)
             .WithPortalConfig("Features__Onboarding__InvitationOnly", "true");
@@ -117,7 +117,7 @@ public class FluentBuilderTest
             .OpenRouter(["z-ai/glm-5.3"])
             .OpenRouterEU(["z-ai/glm-5.3", "mistralai/mistral-medium-3"])
             .RequiredDataResidency(" Eu ")
-            .Tiers(heavy: "Provider/OpenRouterEU/z-ai/glm-5.3"));
+            .TierModels(coding: "Provider/OpenRouterEU/z-ai/glm-5.3"));
         record = record with
         {
             Ai = record.Ai! with
@@ -421,7 +421,7 @@ public class FluentBuilderTest
             {
                 OpenRouterEU = new ModelProvider { Models = ["z-ai/glm-5.3", "moonshotai/kimi-k2.6"] },
                 RequiredDataResidency = "Eu",
-                Tiers = new ModelTiers { Heavy = "Provider/OpenRouterEU/z-ai/glm-5.3" },
+                Tiers = new ModelTiers { Coding = "Provider/OpenRouterEU/z-ai/glm-5.3" },
             },
         };
         Assert.True(DeploymentPortalConfig.IsModelCeiling(governed));

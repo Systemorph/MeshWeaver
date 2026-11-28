@@ -113,7 +113,7 @@ Which model a conversation actually runs on resolves in this order (see `ChatCli
 
 1. **The chat composer selection** (`ThreadComposer.ModelName` → `CurrentModelName`) — the user's explicit pick always wins. The one exception is **Auto**, the default selection for a new thread: Auto is a router, so it is *dispatched* rather than served (see below).
 2. **The agent's `AgentConfiguration.ModelTier`** — a USAGE tier (`utility` / `chat` / `reasoning` / `coding`), resolved against the `tier` label on the model NODES. This is also what **Auto** dispatches on. Optional: with no tier declared, or a tier no model carries, it falls through. See [Model Tiers](/Doc/AI/ModelTiers).
-3. **The deprecated `ModelTier:*` config** (`ModelTier__Heavy/Standard/Light/Utility`) — still read so an existing deployment keeps its mapping, and only ever consulted for a tier no model node carries.
+3. **The record's tier seed** (`AI__Tiers__{tier id}`) — only ever consulted for a tier no model node carries. The old `ModelTier__*` keys are retired.
 4. **The deployment default** — the lowest-`order` model whose credentials resolve.
 
 Every step after the first skips models with no usable credential, and skips the router. Resolution never fails: the only outcome with no model is an entirely-unusable catalog, which fails the round audibly.
