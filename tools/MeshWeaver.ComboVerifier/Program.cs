@@ -478,6 +478,11 @@ var verdictToWrite = moduleCaveats.IsEmpty
     ? run.Verdict
     : run.Verdict with { Caveats = run.Verdict.Caveats.AddRange(moduleCaveats) };
 var fullVerdictPath = Path.GetFullPath(verdictPath);
+// The FULL verdict stays beside the landed one (the diagnosis of a Red lives there); only the
+// bounded copy is what the lander posts.
+File.WriteAllText(
+    Path.ChangeExtension(fullVerdictPath, ".full.json"),
+    JsonSerializer.Serialize(verdictToWrite, InstanceComboAssembler.Json));
 File.WriteAllText(
     fullVerdictPath, JsonSerializer.Serialize(verdictToWrite.BoundedForLanding(), InstanceComboAssembler.Json));
 Console.WriteLine();

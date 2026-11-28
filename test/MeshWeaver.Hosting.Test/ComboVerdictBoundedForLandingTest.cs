@@ -23,6 +23,7 @@ public sealed class ComboVerdictBoundedForLandingTest
                 {
                     ModuleId = "Widget",
                     Outcome = ModuleVerificationOutcome.Failed,
+                    KnownDebt = [new string('d', 50_000)],
                     Failures = [.. Enumerable.Range(0, 5_000).Select(i => $"Widget/T{i}: compile Failed — " + new string('x', 10_000))],
                 },
             ],
@@ -36,8 +37,9 @@ public sealed class ComboVerdictBoundedForLandingTest
         Assert.Equal(ComboVerification.MaxLinesPerList + 1, module.Failures.Count);
         Assert.Contains("more line(s) cut", module.Failures[^1]);
         Assert.All(module.Failures.Take(ComboVerification.MaxLinesPerList),
-            f => Assert.True(f.Length < ComboVerification.MaxLineLength + 100));
-        Assert.Contains("more characters cut", Assert.Single(bounded.Caveats));
+            f => Assert.True(f.Length <= ComboVerification.MaxLineLength));
+        Assert.Contains("cut]", Assert.Single(module.KnownDebt));
+        Assert.Contains("cut]", Assert.Single(bounded.Caveats));
         Assert.True(System.Text.Json.JsonSerializer.Serialize(bounded).Length < 400_000);
     }
 
@@ -53,5 +55,28 @@ public sealed class ComboVerdictBoundedForLandingTest
         };
         Assert.Equal(verdict.Caveats, verdict.BoundedForLanding().Caveats);
         Assert.Equal(verdict.Modules[0].Failures, verdict.BoundedForLanding().Modules[0].Failures);
+    }
+
+    [Fact]
+    public void ManyModules_AreHeldUnderTheWholeVerdictBudget_NotJustPerList()
+    {
+        var verdict = new ComboVerification
+        {
+            CandidateTag = "1.0.0",
+            Verdict = ComboVerdictKind.Red,
+            Modules =
+            [.. Enumerable.Range(0, 60).Select(m => new ModuleVerification
+            {
+                ModuleId = $"M{m}",
+                Outcome = ModuleVerificationOutcome.Failed,
+                Failures = [.. Enumerable.Range(0, 500).Select(i => new string('x', 5_000))],
+            })],
+        };
+
+        var bounded = verdict.BoundedForLanding();
+
+        Assert.Equal(60, bounded.Modules.Count);
+        Assert.All(bounded.Modules, m => Assert.Equal(ModuleVerificationOutcome.Failed, m.Outcome));
+        Assert.True(System.Text.Json.JsonSerializer.Serialize(bounded).Length <= ComboVerification.MaxLandedSize);
     }
 }
