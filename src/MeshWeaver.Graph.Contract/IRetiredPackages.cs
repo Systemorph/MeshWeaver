@@ -33,6 +33,21 @@ public interface IRetiredPackages
     /// skipped. Returns true the first time it is asked about a partition.</summary>
     /// <param name="partition">The partition.</param>
     bool FirstSighting(string partition);
+
+    /// <summary>True while this boot has announced a registry listing (<see cref="ExpectListing"/>) that has
+    /// neither answered nor failed yet — a gate about to park a type waits for it (bounded), so the boot
+    /// race between the compile watcher and the listing never writes the Error the declaration prevents.</summary>
+    bool AwaitingListing { get; }
+
+    /// <summary>Emits once the awaited listing answered or failed (replayed to a late subscriber).</summary>
+    IObservable<System.Reactive.Unit> WhenListed { get; }
+
+    /// <summary>Announces that a registry listing is about to be read this boot.</summary>
+    void ExpectListing();
+
+    /// <summary>Releases <see cref="WhenListed"/>: the listing answered (<see cref="Declare"/> does this) or
+    /// the pass ended without one.</summary>
+    void MarkListed();
 }
 
 /// <summary>One package the registry declares retired.</summary>
@@ -61,10 +76,31 @@ public sealed class RetiredPackageLedger : IRetiredPackages
                 .FirstOrDefault(d => string.Equals(d.PackageId, partition, StringComparison.OrdinalIgnoreCase));
 
     /// <inheritdoc />
-    public void Declare(string source, IReadOnlyCollection<RetiredPackageDeclaration> retired) =>
+    public void Declare(string source, IReadOnlyCollection<RetiredPackageDeclaration> retired)
+    {
         ImmutableInterlocked.Update(ref bySource, static (map, arg) =>
             arg.Retired.Count == 0 ? map.Remove(arg.Source) : map.SetItem(arg.Source, [.. arg.Retired]),
             (Source: source ?? "", Retired: retired));
+        MarkListed();
+    }
+
+    private readonly System.Reactive.Subjects.BehaviorSubject<bool> listed = new(false);
+    private int expecting;
+
+    /// <inheritdoc />
+    public bool AwaitingListing => Volatile.Read(ref expecting) == 1 && !listed.Value;
+
+    /// <inheritdoc />
+    public IObservable<System.Reactive.Unit> WhenListed =>
+        System.Reactive.Linq.Observable.Select(
+            System.Reactive.Linq.Observable.Take(System.Reactive.Linq.Observable.Where(listed, l => l), 1),
+            _ => System.Reactive.Unit.Default);
+
+    /// <inheritdoc />
+    public void ExpectListing() => Interlocked.Exchange(ref expecting, 1);
+
+    /// <inheritdoc />
+    public void MarkListed() => listed.OnNext(true);
 
     /// <inheritdoc />
     public bool FirstSighting(string partition) =>

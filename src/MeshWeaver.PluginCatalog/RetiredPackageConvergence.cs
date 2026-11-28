@@ -48,7 +48,9 @@ public static class RetiredPackageConvergence
     {
         var listed = listing.Packages.Select(p => p.Id).ToImmutableHashSet(StringComparer.Ordinal);
         return [.. listing.Retired
-            .Where(r => !string.IsNullOrWhiteSpace(r.Id) && !listed.Contains(r.Id))
+            // The same id rule the source applies (NodeRepoPackageSource.ParseRetired): no '/', not padded,
+            // so a wire id can never alias another package's '{source}/{id}' pattern.
+            .Where(r => !string.IsNullOrWhiteSpace(r.Id) && !r.Id.Contains('/') && r.Id.Trim() == r.Id && !listed.Contains(r.Id))
             .Select(r => new RetiredPackageDeclaration(r.Source is { Length: > 0 } own ? own : source, r.Id, r.Reason ?? ""))
             .DistinctBy(r => (r.Source, r.PackageId))];
     }

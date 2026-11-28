@@ -955,6 +955,15 @@ internal static class NodeTypeCompilationHelpers
                                         Installed: installed is null
                                             ? (bool?)null
                                             : installed.Contains(PartitionOf(hubPath)))))
+                            // 🚨 #8619 boot race: a type about to be judged UNTRACKED waits (bounded) for the
+                            // registry listing this boot announced, so its retired declaration is in the
+                            // ledger before the gate decides to park. No listing expected => no wait.
+                            .SelectMany(answer => !answer.Tracked
+                                    && hub.ServiceProvider.GetService<MeshWeaver.Graph.IRetiredPackages>() is { AwaitingListing: true } awaited
+                                ? awaited.WhenListed.Timeout(RetiredListingWait)
+                                    .Catch((TimeoutException _) => Observable.Return(Unit.Default))
+                                    .Take(1).Select(_ => answer)
+                                : Observable.Return(answer))
                             .Finally(() => onDemandAdoptionSubs.Remove(tracking))
                             .Subscribe(
                                 answer =>
@@ -4111,6 +4120,10 @@ internal static class NodeTypeCompilationHelpers
     /// judges a type anyway (#8440). Generous: a roll pod is not ready while the pass runs, and a
     /// type left Pending a little longer costs nothing, while a park written before the pass
     /// adopted the type costs the whole roll. A pass that never releases costs this delay once.</summary>
+    /// <summary>How long the untracked-module gate waits for the boot's registry listing before it judges
+    /// anyway (#8619). A listing that never answers costs a type that would park one delay, once.</summary>
+    internal static readonly TimeSpan RetiredListingWait = TimeSpan.FromSeconds(90);
+
     internal static readonly TimeSpan BootSeedingWaitBudget = TimeSpan.FromMinutes(10);
 
     /// <summary>

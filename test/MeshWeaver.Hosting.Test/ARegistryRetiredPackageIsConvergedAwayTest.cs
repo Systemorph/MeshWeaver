@@ -54,6 +54,29 @@ public class RetiredPackageProofTest
     }
 
     [Fact]
+    public void AMalformedWireId_IsNeverProven()
+    {
+        var proven = RetiredPackageConvergence.Proven("Plugins", Listing([],
+            new RetiredPackage { Id = "a/b" }, new RetiredPackage { Id = " Padded " }, new RetiredPackage { Id = "Ok" }));
+        Assert.Equal(["Ok"], proven.Select(p => p.PackageId));
+    }
+
+    [Fact]
+    public void TheLedger_HoldsAGateOnlyWhileAnAnnouncedListingIsPending()
+    {
+        var ledger = new RetiredPackageLedger();
+        Assert.False(ledger.AwaitingListing, "no listing announced: nothing to wait for");
+        ledger.ExpectListing();
+        Assert.True(ledger.AwaitingListing);
+        var released = false;
+        using var sub = ledger.WhenListed.Subscribe(_ => released = true);
+        Assert.False(released);
+        ledger.Declare("Plugins", []);
+        Assert.True(released);
+        Assert.False(ledger.AwaitingListing);
+    }
+
+    [Fact]
     public void AnIdTheSameListingAlsoLists_IsNotRetired()
     {
         var proven = RetiredPackageConvergence.Proven("Plugins",

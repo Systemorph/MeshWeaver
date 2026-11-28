@@ -1128,6 +1128,9 @@ public sealed class InstanceAutoRegistrationService(
     private IObservable<DefaultInstallSummary> InstallDefaults(PluginCatalogOptions options) =>
         Observable.Defer(() =>
         {
+            // The compile gate waits (bounded) for this pass's registry listing before it parks a type
+            // (#8619); released when the listing answers or the pass ends, whichever comes first.
+            hub.ServiceProvider.GetService<IRetiredPackages>()?.ExpectListing();
             hub.ServiceProvider.GetService<BootProgress>()?.PhaseStarted(BootPhaseIds.Resolve,
                 "Resolving the module set", "listing the selected packages from the configured sources");
             return InstanceSourcesRead();
@@ -1137,7 +1140,8 @@ public sealed class InstanceAutoRegistrationService(
             // RetryFailedDefaults) knows work remains once the store answers.
             .Select(summary => read.Failed
                 ? summary with { ListingIncomplete = true, SourceUnreachable = true }
-                : summary));
+                : summary)
+            .Finally(() => hub.ServiceProvider.GetService<IRetiredPackages>()?.MarkListed()));
 
     /// <summary>
     /// The instance's OWN package sources (<c>Admin/PackageSource-*</c>,

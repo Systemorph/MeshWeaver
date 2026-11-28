@@ -426,6 +426,9 @@ public sealed class PackageListingCache : IDisposable
         public IObservable<bool> PublishesCommit(string commit, string gitRef) =>
             inner.PublishesCommit(commit, gitRef);
 
+        // NOTE: RetiredPackage is stored as a PackageManifest ONLY to reuse the cache: Id = Id,
+        // Description = Reason, Version = RetiredAt. Any field RetiredPackage gains (Source today, which
+        // the registry stamps AFTER the cache) must be added to BOTH mappings below.
         // The retired declaration rides the SAME stale-while-revalidate cache as the listing — under
         // its own key format, as manifests carrying (id, reason, date) — so a registry answering
         // every instance's poll reads the declaration file once per revalidation, not once per
