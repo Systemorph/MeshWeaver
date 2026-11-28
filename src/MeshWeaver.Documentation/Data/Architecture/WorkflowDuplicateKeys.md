@@ -170,7 +170,7 @@ Swept 2026-09-07 over every satellite's `main`, workflows and composite actions,
 | MeshWeaver.SocialMedia | `9408df755cd9` | 5 | clean |
 | MeshWeaver.Manufacturing | `cfa72caecc37` | 2 | clean |
 
-None of them carries a composite action today. The Education and Crm duplicates from the near-miss
+None of them carries a composite action today. The Education duplicates from the near-miss
 never reached `main`, which is why the guard could be adopted without an allow file — and there is
 no allow file, deliberately: a duplicate key has no legitimate form to exempt.
 

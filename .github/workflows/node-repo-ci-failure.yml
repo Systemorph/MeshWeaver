@@ -6,7 +6,7 @@ name: Node repo ci-failure ledger (reusable)
 # systemorph-com (the control instance control.systemorph.com); communicate via MCP — open a thread
 # with a triage agent; pool such connections by portal."
 #
-# Every satellite (MeshWeaver.Plugins, .SocialMedia, .Crm, .Reinsurance, .Education, .Manufacturing)
+# Every satellite (MeshWeaver.Plugins, .SocialMedia, .Reinsurance, .Education, .Manufacturing)
 # runs its full build on `push: [main]` and once a day on `schedule` — the per-build platform wave
 # was switched off the same day. A red run there is attached to no pull request, no reviewer and no
 # check list. It updates nothing and pages nobody: red in an empty room, which from outside is

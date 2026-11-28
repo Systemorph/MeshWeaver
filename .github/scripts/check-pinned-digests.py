@@ -80,7 +80,7 @@ DESIGN CONSTRAINTS, each one a thing this fleet has already been bitten by
   `sha256:<64 hex>` nor a `${{ … }}` forward is a FAILURE (MALFORMED), never an absence.
 
 * A ZERO IS MEASURED, NOT ASSUMED. Education pins under `MW_PORTAL_DIGEST` / `MW_MIGRATION_DIGEST`
-  / `MW_TEST_DIGEST`, SocialMedia and Crm pin inside a `run:` step output, Plugins and Reinsurance
+  / `MW_TEST_DIGEST`, SocialMedia and a since-archived repo pin inside a `run:` step output, Plugins and Reinsurance
   use `MW_IMAGE_DIGEST` / `MW_PORTAL_IMAGE_DIGEST`. A check keyed on the two common names reports
   four of six repos clean while verifying none of their pins. So extraction is shape-driven, not
   name-driven, and the report PRINTS THE DENOMINATOR — repos scanned, repos that pin, repos that do
@@ -1334,8 +1334,8 @@ def self_test(repo_root: Path) -> int:
         failures.append("MISSING malformed: sha256:PLACEHOLDER read as an absence, not a defect")
     if not any(m.where == "ci.yml:MW_SHORT_DIGEST" for m in malformed):
         failures.append("MISSING malformed: a truncated digest accepted as well-formed")
-    # …and in the $GITHUB_OUTPUT shape too. Covering only the `env:` shape exempted SocialMedia and
-    # Crm — the two repositories that write their tester pin as a step output — from the guard
+    # …and in the $GITHUB_OUTPUT shape too. Covering only the `env:` shape exempted SocialMedia — a
+    # repository that writes its tester pin as a step output — from the guard
     # entirely, while this self-test reported it proven (MeshWeaver#3454, 2026-09-06).
     if not any(m.where == "ci.yml:bake-image-digest" for m in malformed):
         failures.append("MISSING malformed: a placeholder in a $GITHUB_OUTPUT read as an absence")

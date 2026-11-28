@@ -103,7 +103,7 @@ merged into Plugins `main`; landing it first leaves every Plugins Blazor project
 (NU1010) at its next platform move.
 
 No satellite other than Plugins references any of the moved packages (measured on `origin/main` of
-Education, Reinsurance, SocialMedia, Manufacturing and Crm). Memex has its own
+Education, Reinsurance, SocialMedia, Manufacturing). Memex has its own
 `Directory.Packages.props` and is unaffected.
 
 ## Inventory — what still names a GUI after this change

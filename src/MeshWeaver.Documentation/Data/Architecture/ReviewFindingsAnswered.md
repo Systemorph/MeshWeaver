@@ -334,8 +334,8 @@ ruleset change.
 
 **Not changed: the fleet lane.** `node-repo-review-answered.yml` still writes its opt-in verdict
 (`verdict-check-run`) with the job token, so it has the same exposure. No satellite opts in today:
-measured 2026-11-14, MeshWeaver.Plugins, Memex, Reinsurance, Education, SocialMedia, Manufacturing and
-Crm all call the lane without `verdict-check-run`. Each of them publishes the job-shaped check, which
+measured 2026-11-14, MeshWeaver.Plugins, Memex, Reinsurance, Education, SocialMedia and
+Manufacturing all call the lane without `verdict-check-run`. Each of them publishes the job-shaped check, which
 is its own run's job and therefore in its own suite. Core's lane opts in, but publishes the
 non-required `lane / Automatic review answered`. A satellite that opts in needs the App writer first.
 MeshWeaver.Plugins pins its review context to the Actions App (id 15368), so moving its verdict to an
@@ -563,9 +563,9 @@ requires) bought a full Copilot round on code the pull request did not change: n
   caller; only then is that repository's ruleset flipped.
 - **The rollout is complete — measured 2026-10-30.** A dry run of `set-copilot-review-on-push.py`
   over its whole `FLEET` read `review_on_push: false` — `unchanged` — on all ten rulesets
-  (MeshWeaver 2128472, MeshWeaver.Plugins 19008635, Memex 21038115, Crm 21741681, Education
+  (MeshWeaver 2128472, MeshWeaver.Plugins 19008635, Memex 21038115, Education
   19153714, Reinsurance 20302588, SocialMedia 20302587, Manufacturing 20625978, FundReporting
-  23730648, Deploy 25787784), and every one of those ten repositories carries
+  23730648, Deploy 25787784, and a since-archived repo's), and every one of those ten repositories carries
   `.github/workflows/request-review-on-change.yml` on its default branch (contents API). Nothing is
   left to apply.
 - **The self-test.** The `REAL CHANGE` and `real-change` cases pin it: a main-only merge after a
@@ -1139,7 +1139,7 @@ to protection. So no repository was left with a required context that never repo
 
 Two things the rollout found, worth knowing before the next adopter:
 - **A satellite that carries `scripts/check-shared-lanes.py` classifies an unknown lane as
-  source-building** (Reinsurance, Crm, SocialMedia and Manufacturing do; Education carries no such
+  source-building** (Reinsurance, SocialMedia and Manufacturing do; Education carries no such
   script). It then demands `platform-ref`, so the caller's own `Nothing pins the platform` / policy
   gate goes red. In those repositories the caller PR must also add `node-repo-review-answered.yml` to
   `SCRIPT_ONLY_LANES`, with self-test cases for both directions.
@@ -1213,7 +1213,7 @@ thread's root now has a comment whose `in_reply_to_id` points at it; and **every
 counts the finding as answered.** The finding is untreated and nothing says so.
 
 Measured on 2026-09-19: **100 posts across four sessions** went out this way, each a `@`-prefixed
-filename or absolute path — Memex 41, Crm 24, Reinsurance 20, Manufacturing 15. Three of the four
+filename or absolute path — Memex 41, Reinsurance 20, Manufacturing 15, and 24 in a since-archived repository. Three of the four
 sessions believed they had replied and reported thread counts to prove it; the proof was the very
 field that cannot distinguish the two. The fourth caught it only by reading one reply back.
 

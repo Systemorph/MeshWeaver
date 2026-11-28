@@ -55,7 +55,7 @@ Core's `dotnet-test.yml` *does* carry `github.actor != 'dependabot[bot]'` on `sh
 precedent**: those gates also trigger on `merge_group`, where the Actions store IS available, and
 the merge queue is the only path to `main` — *the exemption moves WHERE the gate runs, never
 WHETHER it runs*. **Measured 2026-09-06: only `Systemorph/MeshWeaver` has a `merge_queue` rule.**
-Plugins, Reinsurance, SocialMedia, Crm, Manufacturing, Education and Memex have none — several
+Plugins, Reinsurance, SocialMedia, Manufacturing, Education and Memex have none — several
 carry a `merge_group:` trigger whose event never fires, which is the trap. Copying that `if:` into
 a satellite is a skip-trapdoor, and a silent one: the satellites' required contexts are the gate
 jobs themselves, and an absent required context counts as SATISFIED.
@@ -286,7 +286,7 @@ BEFORE the cap does.
 
 **Never hand-roll (or copy-paste) a node repo's CI.** The shared jobs live here as `workflow_call`
 workflows — `.github/workflows/node-repo-{validate,compile-check,gate,tag-modules,publish-bake}.yml`
-— and MeshWeaver.Plugins / .Education / .Reinsurance / .SocialMedia / .Crm / .Manufacturing call
+— and MeshWeaver.Plugins / .Education / .Reinsurance / .SocialMedia / .Manufacturing call
 them, keeping only repo-specific policy (digest pin, gating, `repository_dispatch` receiver, their
 own `scripts/`). Adopting one renames that repo's required-status-check contexts to
 `<caller job> / <name>` — do it in the same change.
@@ -318,7 +318,7 @@ execution named three violations.
 
 🚨 **Calling the lane is NECESSARY and NOT SUFFICIENT — the PIN must carry the guard**, and this is
 the half an adoption table cannot see. Measured over every satellite's `main`, 2026-09-07: three
-pre-existing callers (Crm, SocialMedia, Education) pin a `node-repo-validate` sha that predates
+pre-existing callers (SocialMedia, Education) pin a `node-repo-validate` sha that predates
 `check-pr-secret-preflight.py`, so they call the lane and are not checked by it — **4 violations
 each, `MW_REGISTRY_KEY` among them**, which is precisely Reinsurance#128's absent secret. The
 control that makes that a measurement rather than an assertion: Reinsurance, the ONE pre-existing

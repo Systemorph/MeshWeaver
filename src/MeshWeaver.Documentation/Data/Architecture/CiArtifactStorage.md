@@ -52,7 +52,7 @@ their dated numbers stay as evidence.
   artifacts listing reads `total_count: 0`. An earlier manual run, 39583344941, also used the
   store. Its one failure was the on-demand journey suite, which is a separate issue.
 - 🚨 **Deleting the overrides moved only the selected repositories.** `MeshWeaver.Reinsurance`,
-  `.Manufacturing`, `.Crm` and `.FundReporting` have no variable at any scope. For them `resolve`
+  `.Manufacturing` and `.FundReporting` have no variable at any scope. For them `resolve`
   maps the empty value to the GitHub branch, so they still write GitHub artifacts. Widening the
   selection does not move them by itself either: each repository also needs the
   `artifact-store:` / `artifact-store-id:` wiring that the three repositories on the store carry,
@@ -100,7 +100,7 @@ What to expect, and what is not explained:
   Memex `actions-cleanup.yml` was therefore red every night from 2026-09-26 and deleted nothing in
   Plugins. Memex#796 takes Plugins off its list, because Plugins no longer writes there. If Plugins
   ever returns to `gha`, the walk must first stop using the unfiltered listing.
-- 🚨 **Reinsurance, Crm and Manufacturing are billed a constant that no API explains.** Their
+- 🚨 **Reinsurance, Manufacturing and a since-archived repo were billed a constant that no API explains.** Their
   meter is identical to the GB-hour on every full day for a month, while their visible artifacts
   churn nightly and total a few MB. Nothing in this repository changes that number. It is a
   question for GitHub billing support: what is metered for those three repositories? Moving them
@@ -298,7 +298,7 @@ reuse (`bake-run-id`)"*. **That reuse was never built**: `bake-run-id` exists in
 or input anywhere in the fleet, and `node-repo-publish-bake.yml` uploads no artifact at all and
 bakes its own mount. Two copies of identical bytes (every shard bakes the whole mount, so the fold
 is a union of duplicates), held three days — **66.8 GB across the fleet**, and ~100% of the
-Reinsurance, Manufacturing, Crm and Education bills.
+Reinsurance, Manufacturing and Education bills.
 
 🚨 **But "read by nothing" was WRONG, and the correction is the lesson.** #4578 deleted both uploads
 on a fleet-wide search that found no consumer; the search read **local checkouts**, and
@@ -306,7 +306,7 @@ MeshWeaver.Education's was eight commits stale. Its `main` downloads `bake-<sha>
 `e2e-install` and in the four-shard `e2e-mesh`, neither with `continue-on-error`, both feeding the
 blocking `mesh-gate` — and it calls the lane at `@main`, so the removal would have reddened its next
 run on an artifact that had simply stopped being produced. #4585 restored the uploads behind an
-`upload-bake` input **defaulting TRUE**; Reinsurance, SocialMedia, Crm and Manufacturing pass
+`upload-bake` input **defaulting TRUE**; Reinsurance, SocialMedia and Manufacturing pass
 `false` (verified 2026-09-17 against each repo's REMOTE default-branch workflows), Plugins' opt-out
 is MeshWeaver.Plugins#2024, and Education keeps it. That holds ~64.9 GB of the 66.8 and costs
 Education nothing.
@@ -410,7 +410,7 @@ the move to `azblob:` this page already recommends.
 > that did and did not move is under [Where it stands](#where-it-stands-measured-2026-10-21-rest-only).
 
 **`MW_ARTIFACT_STORE=gha` is set as a REPOSITORY variable on eight repositories** — `MeshWeaver`,
-`.Plugins`, `.Education`, `.Reinsurance`, `.SocialMedia`, `.Manufacturing`, `.Crm`, `.Feedback` —
+`.Plugins`, `.Education`, `.Reinsurance`, `.SocialMedia`, `.Manufacturing`, `.Feedback` and a since-archived repo —
 since 2026-09-19T05:35Z, on the maintainer's instruction, after ~9 h in which every
 `MeshWeaver.Plugins` run was red and 20 pull requests could not go green. A repository variable
 overrides the organisation one, so each is back on the GitHub-artifact path. It was verified on both
