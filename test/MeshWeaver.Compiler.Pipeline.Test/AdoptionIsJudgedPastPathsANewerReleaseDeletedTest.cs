@@ -54,7 +54,7 @@ public class AdoptionIsJudgedPastPathsANewerReleaseDeletedTest
         ImmutableDictionary.CreateRange(
             paths.Select((p, i) => new KeyValuePair<string, long>(p, 639_314_072_700_000_000 + i)));
 
-    private static NodeTypeDefinition Adopted(string adoptedVersion, string currentVersion) =>
+    private static NodeTypeDefinition Adopted(string? adoptedVersion, string? currentVersion) =>
         new()
         {
             CompilationStatus = CompilationStatus.Ok,
@@ -118,9 +118,24 @@ public class AdoptionIsJudgedPastPathsANewerReleaseDeletedTest
     [InlineData(null, null)]
     public void AnUnknownVersion_IsNoVersionMove_AndStillDefers(string? adopted, string? current)
         => NodeTypeCompilationHelpers.CanJudgeAdoption(
-                Adopted(adopted!, current!) with { AdoptedModuleVersion = adopted, CurrentModuleVersion = current },
-                LiveSet)
+Adopted(adopted, current), LiveSet)
             .Should().BeFalse("an unprovable version claim never lifts the #4280 deferral");
+
+    [Fact]
+    public void AcrossAVersionMove_AnIncludeTheNewerReleaseDropped_IsJudgedToo()
+        => NodeTypeCompilationHelpers.CanJudgeAdoption(
+                BundleFingerprint, LiveFingerprint, LiveSet, BundlePaths,
+                adoptedSourceIncludes: ["Crm/Source/Retired"], currentSourceIncludes: [],
+                adoptedModuleVersion: "4.0.10", currentModuleVersion: "4.2")
+            .Should().BeTrue("a resolved include closure without it means 4.2 dropped it");
+
+    [Fact]
+    public void AcrossAVersionMove_AnIncludeClosureNotComputedYet_StillDefers()
+        => NodeTypeCompilationHelpers.CanJudgeAdoption(
+                BundleFingerprint, LiveFingerprint, LiveSet, BundlePaths,
+                adoptedSourceIncludes: ["Crm/Source/Retired"], currentSourceIncludes: null,
+                adoptedModuleVersion: "4.0.10", currentModuleVersion: "4.2")
+            .Should().BeFalse("an uncomputed closure is unknown, not absent");
 
     [Fact]
     public void ABundleNewerThanTheLiveSource_StillDefers()

@@ -1891,8 +1891,10 @@ internal static class NodeTypeCompilationHelpers
     /// compiled the live source, and a recycle re-bound the same build. Measured on the company
     /// instance, 2026-11-28: <c>Crm/Counterparty</c> served the 4.0.10 bundle over 4.2 source
     /// through two provisions, because 4.2 renamed two shared sources the 4.0.10 bundle names.
-    /// So across a version move the path witness is skipped and the fingerprints are judged; a
-    /// same-release race (#4280's measurement) still defers exactly as before.</para>
+    /// So across a version move the path witness and the include-presence witness are skipped and
+    /// the fingerprints are judged (an include closure the owner has not computed yet still
+    /// defers — that is "unknown", not "absent"); a same-release race (#4280's measurement) still
+    /// defers exactly as before.</para>
     /// </summary>
     /// <param name="adoptedFingerprint">What the producer says these bytes were built from.</param>
     /// <param name="liveFingerprint">The owner's published live fingerprint.</param>
@@ -1924,8 +1926,12 @@ internal static class NodeTypeCompilationHelpers
         // it was measured? Both halves — the query-resolved paths and the include closure —
         // ordered after the equality check for the same reason the empty witness is: an honest
         // match is an honest match whatever the lists say.
-        return (BundleIsAnOlderRelease(adoptedModuleVersion, currentModuleVersion)
-                || SourcePathsNotYetLive(adoptedSourcePaths, liveSources).Count == 0)
+        // Across a version move an absent path or include is a DELETION by the newer release, so
+        // neither witness waits for it — except an include closure the owner has not computed yet
+        // (null), which says nothing about presence and still defers.
+        if (BundleIsAnOlderRelease(adoptedModuleVersion, currentModuleVersion))
+            return adoptedSourceIncludes is not { Count: > 0 } || currentSourceIncludes is not null;
+        return SourcePathsNotYetLive(adoptedSourcePaths, liveSources).Count == 0
                && SourceIncludesNotYetLive(adoptedSourceIncludes, currentSourceIncludes).Count == 0;
     }
 

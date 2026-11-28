@@ -1471,7 +1471,8 @@ the old bundle stood. Measured on the company instance, 2026-11-28: `Crm/Counter
 source kept serving the 4.0.10 bundle as `AdoptedVerified` through two governed provisions. 4.2 had
 renamed two shared sources that the 4.0.10 bundle names, so the seeder's pre-write decline deferred,
 each release's non-forced compile re-adopted 4.0.10, and the owner's stamp deferred too. Now, when
-the live source is the newer release, the path witness is skipped and the fingerprints are judged:
+the live source is the newer release, the path witness and the include-presence witness are
+skipped and the fingerprints are judged (an include closure not computed yet still defers):
 the seeder declines the stale bundle, and the owner records `StaleAdopted` or `AdoptionRefused` and
 compiles the live source. Within one release, and whenever either version is unknown, the deferral
 stands unchanged. Pinned by `AdoptionIsJudgedPastPathsANewerReleaseDeletedTest`.
