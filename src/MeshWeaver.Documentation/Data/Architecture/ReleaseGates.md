@@ -467,7 +467,7 @@ Plugins merge stamped Store's `minMeshVersion` to `3.1.11117` while the newest s
 was `3.1.11102`. Every satellite bake that started after that merge failed
 `PackagePlatformFloorException: Package 'Store' was not installed`, and then every package that
 requires `Store/Plugin` — while the same kind of dispatch, sent nine minutes earlier and started
-before the merge, was green (Manufacturing, Crm, SocialMedia and Reinsurance).
+before the merge, was green (Manufacturing, SocialMedia and Reinsurance).
 
 #### 🚨 `stage-modules` names what a repo USES — the lane stages their `requires` closure
 

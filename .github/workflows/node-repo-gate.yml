@@ -647,8 +647,8 @@ on:
           default. Hence: the upload is restored, ON by default, and a caller that has PROVEN it
           does not read the bake turns it off explicitly.
 
-          The five that provably do not read it — Plugins, Reinsurance, SocialMedia, Manufacturing
-          and Crm, verified against REMOTE default-branch content, not a checkout — pass false and
+          The four that provably do not read it — Plugins, Reinsurance, SocialMedia and Manufacturing,
+          verified against REMOTE default-branch content, not a checkout — pass false and
           keep the saving (~64.9 GB of the 66.8).
         required: false
         type: boolean

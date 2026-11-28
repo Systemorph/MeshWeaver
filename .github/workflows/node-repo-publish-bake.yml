@@ -409,7 +409,7 @@ on:
           `flat` default guarded against is unreachable rather than merely forbidden. What the
           per-caller opt-in cost instead was a silent default: a node repo that says nothing — and
           every node repo that will ever be created — published in place. Measured 2026-09-14 over
-          the `ci.yml` on `main` of all six node repos (Plugins, Crm, Education, Reinsurance,
+          the `ci.yml` on `main` of the node repos (Plugins, Education, Reinsurance,
           SocialMedia, Manufacturing): every `uses:` of a `node-repo-*.yml` lane is `@main`, every
           `scripts-ref:` is `main`, and NONE passes this input — so flipping the default here is
           what flips the five single-producer prefixes, with no change in their repositories.
@@ -1507,7 +1507,7 @@ jobs:
       # 3.1.11102, and every satellite bake that started after it went RED on
       # `PackagePlatformFloorException: Package 'Store' was not installed` — then on every package
       # that requires Store/Plugin — while the same dispatch that started before it was green
-      # (Manufacturing, Crm, SocialMedia, Reinsurance). Each module is staged at ITS OWN sealed
+      # (Manufacturing, SocialMedia, Reinsurance). Each module is staged at ITS OWN sealed
       # commit (the publication's per-package listing — a carried package can be older than the
       # publication commit), read by the availability gate off the very publication it cleared.
       # No fall-back to HEAD: an unknown commit is RED. stage-sealed-upstream.sh carries the rules.

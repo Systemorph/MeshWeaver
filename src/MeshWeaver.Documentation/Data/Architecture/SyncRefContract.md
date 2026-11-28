@@ -49,7 +49,7 @@ The `workflow_run` payload carries two facts that are easy to confuse. `event` i
 started; `path` is **what** ran. Keying the publish signal on the first is a proxy, and the proxy
 came apart in both directions:
 
-- A `*/10` cron called **Auto-update green armed PRs** — present in Reinsurance, SocialMedia and Crm,
+- A `*/10` cron called **Auto-update green armed PRs** — present in Reinsurance and SocialMedia,
   and whose whole body is `gh pr list` → `gh api -X PUT …/update-branch` — checks out nothing and
   builds nothing. Measured over 48 h to 2026-09-10T19:36Z it recorded **20** build completions at
   `MeshWeaver.Reinsurance@7d29a303` and **40+** at `MeshWeaver.SocialMedia@07cc155e`, both commits
@@ -72,7 +72,7 @@ repositories (the ninth record, `Systemorph/education`, is a stale pre-rename al
 
 | repository | content CI | `push` | `repository_dispatch` | `schedule` |
 |---|---|:--:|:--:|:--:|
-| MeshWeaver.Plugins · .Education · .Reinsurance · .SocialMedia · .Manufacturing · .Crm | `ci.yml` | ✅ | ✅ | ✅ |
+| MeshWeaver.Plugins · .Education · .Reinsurance · .SocialMedia · .Manufacturing | `ci.yml` | ✅ | ✅ | ✅ |
 | Systemorph/MeshWeaver | `dotnet-test.yml` | ✅ | ✗ | ✗ (`merge_group`, `workflow_dispatch`) |
 | Systemorph/Memex | `build.yml` | ✅ | ✗ | ✗ (`pull_request`, `workflow_dispatch`) |
 

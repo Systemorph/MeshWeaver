@@ -1727,7 +1727,7 @@ test names — and is fixed by a pull request there. Core carries no context for
 
 When several satellites' `main` runs fail within a second of each other, they share a trigger, so
 compare their failed steps before reading any one of them. The shape measured on 2026-09-16:
-Reinsurance, Crm, SocialMedia and Manufacturing all red at 20:14:20Z, each on `compile-check`'s
+Reinsurance, SocialMedia and Manufacturing all red at 20:14:20Z, each on `compile-check`'s
 *Add external modules to the reference set* and the gate shard's *Fetch the upstream publications*:
 
 ```
@@ -1796,7 +1796,7 @@ response contains terminal escape sequences; pass --allow-escape-sequences …) 
 transient`. The hosted runner's `gh` refuses any response body with escape sequences, and every
 Actions log has them.
 
-**Crm, Reinsurance and SocialMedia are no longer unsampled — measured 2026-09-17, and it is worse
+**Reinsurance and SocialMedia are no longer unsampled — measured 2026-09-17, and it is worse
 there.** Every one of their newest `Retry known transients` runs declined on its **first** failed job
 with that same sentence and then `exit 0`, so the shell steward never looked at the rest; and
 MeshWeaver.Plugins' steward declined **22 jobs in one run** (`35245934949`, 16:21Z) the same way.
@@ -1816,7 +1816,7 @@ matrix `failure`/`cancelled` and is judged on its own log.
 
 ### What `/actions/jobs/<id>/logs` actually serves
 
-Read straight from REST — 30 failed jobs across MeshWeaver.Plugins, .Crm, .Reinsurance, .SocialMedia
+Read straight from REST — 30 failed jobs across MeshWeaver.Plugins, .Reinsurance, .SocialMedia
 and MeshWeaver, deliberately not one payload:
 
 | outcome | n | shape |
@@ -1874,7 +1874,7 @@ follow-up, not a claim about today.
 > was rejected as the fix because the flag does not exist on older `gh` (the local 2.95.0 has
 > neither the refusal nor the flag), which would have traded one silent breakage for another.
 >
-> 🚨 **The other four copies are STILL BLIND, on purpose.** Crm, Reinsurance and SocialMedia carry
+> 🚨 **The other four copies are STILL BLIND, on purpose.** Reinsurance and SocialMedia carry
 > the inline shell; MeshWeaver.Plugins has its own `scripts/retry-known-transients.py`. Nothing
 > propagates a core change to them and nothing reds if they drift — `check-resolver-copy.py` covers
 > exactly `scripts/resolve-platform.py` (one constant, and it parses Python, so it cannot see a
@@ -2083,7 +2083,7 @@ It was not always. Until 2026-09-02 the file was hand-copied into every repo in 
 comment at the top asserting the copies were identical, and **they were not** — a comment claiming
 "the single implementation, so they cannot drift" is a hypothesis, and this one was false in three
 separate ways at once. Core had been moved to a minted App installation token; every satellite copy
-was still arming with `secrets.GITHUB_TOKEN`. Only `.Crm` carried the `landed:` read-back branch.
+was still arming with `secrets.GITHUB_TOKEN`. Only one copy carried the `landed:` read-back branch.
 Some copies had no `timeout-minutes` at all. (Figures below are a record of that day's measurement,
 not a live inventory of the fleet — the roster is read with
 `gh search code --owner Systemorph "auto-arm.yml@"`, never from prose.)

@@ -1,7 +1,7 @@
 # The fleet's ONE CI process
 
 Maintainer, 2026-09-13: *"see that process is same as in plugins everywhere ⇒ harmonize."* This page
-is the process every node repo runs — MeshWeaver.Plugins, Education, Reinsurance, SocialMedia, Crm,
+is the process every node repo runs — MeshWeaver.Plugins, Education, Reinsurance, SocialMedia,
 Manufacturing — and where each piece lives. The rule behind it: **the mechanism lives in this repo
 as a shared lane or a shared script; a satellite carries a thin caller and its own content.** A
 satellite that re-implements a piece drifts, and the next incident is measured twice.
@@ -39,8 +39,8 @@ had been `Path(__file__).parent.parent`, which was true only of the shape it cam
 `<repo>/scripts/`, run from its own checkout. Delivered out of tree that expression resolves to
 `/home/runner/work`, and the lane's first `git fetch` died with `fatal: not a git repository`.
 
-The lane was red on **5 of 5 runs in each of Education, Reinsurance, SocialMedia, Manufacturing and
-Crm** from the hour it was adopted, having resolved nothing; Plugins stayed green because its own
+The lane was red on **5 of 5 runs in each of Education, Reinsurance, SocialMedia and Manufacturing**
+from the hour it was adopted, having resolved nothing; Plugins stayed green because its own
 copy still runs in-tree, so the fleet's green/red split looked like an adoption gap rather than a
 defect. The lane's `--self-test` step passed throughout: every case tested a helper, and the root was
 computed in `main`.

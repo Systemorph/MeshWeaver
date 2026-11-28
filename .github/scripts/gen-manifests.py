@@ -49,7 +49,7 @@ copy at the pin; repos keep only allow-files"). `node-repo-validate.yml` fetches
 caller's pinned `platform-ref` and runs it against the caller's tree, exactly as the compile-check
 lane runs `.github/scripts/compile-check.py`. It used to be vendored per repo, and the six copies
 had drifted to five different vintages by the time this landed (measured 2026-09-07): Plugins 1157
-lines, Crm 646, Education 646, Reinsurance 644, SocialMedia 643, Manufacturing 305. Each fix landed
+lines, Education 646, Reinsurance 644, SocialMedia 643, Manufacturing 305. Each fix landed
 in one of them — #434 (two witnesses), #942/#1023 (--resolve), #1426 (the trunk baseline) — and the
 other five kept the bug. Manufacturing's copy never grew the trunk witness at all.
 

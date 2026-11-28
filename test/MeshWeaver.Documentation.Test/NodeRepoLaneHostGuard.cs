@@ -262,7 +262,7 @@ public class NodeRepoLaneHostGuard
     /// and reverting it to <c>flat</c> is the one change in this area that nothing else would notice.
     ///
     /// <para>None of the six node repositories passes <c>publication-layout</c> (measured
-    /// 2026-09-14 over <c>ci.yml</c> on <c>main</c> of Plugins, Crm, Education, Reinsurance,
+    /// 2026-09-14 over <c>ci.yml</c> on <c>main</c> of Plugins, Education, Reinsurance,
     /// SocialMedia and Manufacturing), so this <c>default:</c> is what decides where every
     /// satellite's publication is written. Ask the question that catches this class: <i>if this
     /// default were <c>flat</c> right now, would anything else go red?</i> No — the overlap harness

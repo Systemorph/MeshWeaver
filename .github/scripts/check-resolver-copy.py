@@ -7,7 +7,7 @@ job that decides WHICH sealed platform set the repository builds and tests again
 lanes (`node-repo-gate.yml`, `node-repo-publish-bake.yml`) fetch the platform's copy at
 `scripts-ref` for their own resolution, so a stale vendored copy decides only what the satellite's
 OWN jobs resolve — but that is the file whose answer a red or green depends on. Measured 2026-09-13
-on every repository's `main`: seven copies at six distinct sizes (core 68,150 B; Crm 69,027;
+on every repository's `main`: seven copies at six distinct sizes (core 68,150 B;
 Reinsurance 69,035; SocialMedia 69,035; Manufacturing 69,037; Plugins 60,365; Education 46,786), and
 no guard compared any of them to the canonical. The last time one script was vendored per repo the
 six copies drifted to five vintages and each fix landed in one of them (`gen-manifests.py`, #1426).

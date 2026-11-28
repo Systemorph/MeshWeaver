@@ -16,7 +16,7 @@ job per module, and most of those jobs were shorter than the unit they were bill
     MeshWeaver.Plugins  Module bundles / Module tests    2,935 legs,          MEDIAN 4.0 min (p90 8.2)
 
 Whole-minute rounding on the sub-minute legs was ≈12 % of Plugins' bill (~4,700 billed minutes a
-day) and 25–40 % in Crm / Reinsurance / SocialMedia, whose modules are smaller still. Every leg
+day) and 25–40 % in Reinsurance / SocialMedia, whose modules are smaller still. Every leg
 also pays its own checkout, SDK install and cache restores before it does a second of module work.
 
 So the lane now packs (and tests) N modules per leg — `batch-size`, default 6, hard cap 10 — as a

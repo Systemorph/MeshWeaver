@@ -28,7 +28,7 @@ superseded by the next dispatch before they finished.
   all; a satellite's own publication still wakes exactly its declared dependents
   (`meshweaver-upstream-published`).
   > **Measured 2026-09-13:** core's own per-build `plugins` publication is such a wake, and every
-  > satellite declares `plugins` — so Crm, SocialMedia and Manufacturing each ran ~23
+  > satellite declares `plugins` — so SocialMedia and Manufacturing each ran ~23
   > `meshweaver-upstream-published` runs in the first 19 h, one per core build. The wave changed its
   > event type; the per-build run count did not fall. Education still received
   > `meshweaver-framework-released` (its receiver change, Education#320, was not merged). The
