@@ -2813,7 +2813,7 @@ public static class ModuleActivationSidecar
 
     /// <summary>The pause before each re-try of a refused overwrite: bounded, and short because the
     /// holder is another replica's read, which lasts milliseconds.</summary>
-    internal static readonly TimeSpan[] WriteRetryDelays =
+    private static readonly ImmutableArray<TimeSpan> WriteRetryDelays =
         [TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(800)];
 
     /// <summary>
