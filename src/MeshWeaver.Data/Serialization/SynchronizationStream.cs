@@ -69,10 +69,30 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         WorkspaceReference<TReduced> reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? config
     ) =>
-        (ISynchronizationStream<TReduced>?)
-            ReduceMethod
-                .MakeGenericMethod(typeof(TReduced), reference.GetType())
-                .Invoke(this, [reference, config]);
+        InvokeReduce<TReduced>(reference, config);
+
+    // 🚨 The reducer is dispatched by reflection, and MethodInfo.Invoke wraps whatever it throws in a
+    // TargetInvocationException — which hid the real cause (a HubDisposingException from a hub that
+    // was shutting down) behind a frame that classifies as nothing, so teardown surfaced as an
+    // unclassified Error. The wrapper carries no information of its own: rethrow the inner fault,
+    // stack preserved, so every classifier (FaultClassifier) and every log names the real cause.
+    private ISynchronizationStream<TReduced>? InvokeReduce<TReduced>(
+        WorkspaceReference<TReduced> reference,
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? config)
+    {
+        try
+        {
+            return (ISynchronizationStream<TReduced>?)
+                ReduceMethod
+                    .MakeGenericMethod(typeof(TReduced), reference.GetType())
+                    .Invoke(this, [reference, config]);
+        }
+        catch (TargetInvocationException tie) when (tie.InnerException is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(tie.InnerException).Throw();
+            throw; // unreachable
+        }
+    }
 
     private static readonly MethodInfo ReduceMethod = ReflectionHelper.GetMethodGeneric<
         SynchronizationStream<TStream>

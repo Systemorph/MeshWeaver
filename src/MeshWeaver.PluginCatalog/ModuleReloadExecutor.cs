@@ -84,11 +84,21 @@ public static class ModuleReloadExecutor
             .Concat()
             .Subscribe(
                 _ => { },
-                ex => logger?.LogError(ex,
-                    "[ModuleReload] the executor on {Path} stopped — the request keeps its last status; "
-                    + "the next activation of this node resumes it", hub.Address)));
+                ex => LogStopped(logger, ex, hub.Address)));
         return Observable.Return(Unit.Default);
     }
+
+    /// <summary>
+    /// Reports why the executor's step chain ended. The cause is UNWRAPPED first — a reflective
+    /// dispatch (<c>SynchronizationStream.Reduce</c>) wraps it in a <see cref="System.Reflection.TargetInvocationException"/>,
+    /// which once made a routine teardown read as an unclassified defect. The request node's own hub
+    /// disposing (a restart, a recycle) is the documented way this chain ends — the request keeps its
+    /// status and the next activation resumes it — so it is Information; anything else is a real
+    /// fault and stays an Error, naming the real exception.
+    /// </summary>
+    internal static void LogStopped(ILogger? logger, Exception ex, Address address) =>
+        ExecutorStopLog.Report(logger, ex, address, "[ModuleReload]",
+            "the request keeps its last status; the next activation of this node resumes it");
 
     /// <summary>One activation's state: which steps it has already started (an echo of its own
     /// write must not start the same step twice). Instance state of the activation, never static.</summary>
