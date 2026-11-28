@@ -31,11 +31,11 @@ public interface IDisposalDrainScheduler
 
     /// <summary>
     /// A one-line reading of the lane's own state (live threads, parked threads, drains running, tasks
-    /// queued and for how long), named in the pump verdict so "the scheduler accepted a drain and did
+    /// queued), named in the pump verdict so "the scheduler accepted a drain and did
     /// not run it" says WHICH of the lane's states it was (#5799 recurrence 2026-11-28: 312 verdicts,
     /// no lane report, no way to tell a full lane from a lane with no thread behind its queue).
     /// </summary>
-    string DescribeState() => string.Empty;
+    string DescribeState() => "lane state not reported";
 
     private sealed class NoDrain : IDisposable
     {
