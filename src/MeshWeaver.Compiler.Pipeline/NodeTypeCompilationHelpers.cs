@@ -1017,7 +1017,13 @@ internal static class NodeTypeCompilationHelpers
                                             ? SettleAsHold(pendingDefinition, reason, reasonText)
                                             : SettleAsUnknownMembershipHold(pendingDefinition, reason, reasonText))
                                         return;
-                                    logger?.LogError(
+                                    // A bundle for THIS identity names the type and was DECLINED by a designed rule
+                                    // (a platform floor above the running build, a source fingerprint): the old
+                                    // platform keeping the old build is the intended outcome of a mixed-version
+                                    // rollout, so it is a Warning that states the reason. No bundle at all is the
+                                    // gap nobody has filled — that stays an Error.
+                                    logger?.Log(
+                                        offeredByBundle ? LogLevel.Warning : LogLevel.Error,
                                         "Compile watcher: {HubPath} is a module's content (or of unknown "
                                         + "membership: {Unknown}; declared module version without an install "
                                         + "record: {Declared}) in a partition this mesh does not track, and "
@@ -1504,6 +1510,15 @@ internal static class NodeTypeCompilationHelpers
             && !IsStaticOnlyNodeType(node, def);
         var failedVerdictKickoffSub = ownStream
             .Where(FailedVerdictWantsRedrive)
+            // 🚨 A replica BELOW the package's dependency floor forms no verdict (#6195), so a re-drive
+            // it flips would only end at Unavailable ("compile NOT ATTEMPTED") — and each such flip
+            // spent one of the automatic attempts, so a mixed-version rollout burned the whole budget
+            // and left the type to a human with the Compile button (measured: attempts 8-9 of 8 on a
+            // replica one patch below the floor). It waits instead, spending nothing — and the gate sits BEFORE the dedupe, so a trigger it swallowed is not remembered as seen: a replica that
+            // meets the floor re-drives the type, and this one does so once its own platform arrives.
+            .SelectMany(node => MeetsDependencyFloorHere(hub, hubPath, "failed-verdict re-drive", logger)
+                .Where(eligible => eligible)
+                .Select(_ => node))
             // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
             // still in flight; correctness is the re-check inside the Update lambda, not this.
             //
@@ -3119,6 +3134,11 @@ internal static class NodeTypeCompilationHelpers
         // Nullable<DateTimeOffset> local.
         var dispatchHighWater = new MonotonicHighWaterMark();
 
+        // 🚨 A DECLINED request is not a handled one (BuildDeliveryHold / DeclinedReleaseLedger): a
+        // held type is judged again when the inputs its decline was formed under moved, once per
+        // distinct input set, and never otherwise.
+        var declines = new DeclinedReleaseLedger();
+
         // 🚨 Gate on Status being SETTLED (Ok / Error / null) — never fire
         // while a compile is in-flight (Pending or Compiling). If we fired
         // mid-flight and just kept Status at Compiling (the old behaviour),
@@ -3143,7 +3163,9 @@ internal static class NodeTypeCompilationHelpers
             () => ownStream
             // ContentAs, never a type test: a definition that arrives as a JsonObject/JsonElement reads
             // as ABSENT to `is NodeTypeDefinition`, and a watcher that never matches never says so.
-            .Where(node => node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } def
+            .Where(node => (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } heldDef
+                    && declines.IsDue(heldDef, BuildInputsToken(ModulesHashOf(hub), heldDef.CurrentSourceVersions)))
+                || (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } def
                 && def.RequestedReleaseAt is { } req
                 // Strictly past our process-local COMMIT high-water — a flapped-back
                 // older value (or a duplicate emission of an already-committed
@@ -3159,7 +3181,7 @@ internal static class NodeTypeCompilationHelpers
                 // compile's own activity — age is only the floor.
                 && (def.CompilationStatus is not CompilationStatus.Pending
                                           and not CompilationStatus.Compiling
-                    || InFlightCompileIsStale(def, req) is not null)),
+                    || InFlightCompileIsStale(def, req) is not null))),
                 node =>
                 {
                     // 🚨 The trigger value OBSERVED by the Where for THIS emission.
@@ -3167,8 +3189,23 @@ internal static class NodeTypeCompilationHelpers
                     // def.RequestedReleaseAt re-read, which can have flapped back to
                     // an older value by the time the Update lambda runs on the
                     // action block (see the high-water comment above).
-                    if (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseAt
-                        is not { } triggerAt) return;
+                    var observed = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+                    var liveInputs = BuildInputsToken(ModulesHashOf(hub), observed?.CurrentSourceVersions);
+                    // The re-judgement of a held type whose decline inputs moved. A genuine request
+                    // (past both gates) is always an ordinary request; only a held record with no
+                    // request standing, or one already handled, is a re-judgement.
+                    var askedAt = observed?.RequestedReleaseAt;
+                    var kind = declines.Classify(
+                        observed, liveInputs, askedAt is { } at && dispatchHighWater.IsPast(at));
+                    if (kind == ReleaseTrigger.None) return;
+                    var rejudge = kind == ReleaseTrigger.Rejudge;
+                    var triggerAt = rejudge ? DateTimeOffset.UtcNow : askedAt ?? DateTimeOffset.UtcNow;
+                    void AdvanceHighWater()
+                    {
+                        // A re-judgement carries no request: advancing the mark to "now" would drop
+                        // a genuine request stamped a moment earlier but delivered later.
+                        if (!rejudge) dispatchHighWater.Advance(triggerAt);
+                    }
                     // 🚨 NO high-water advance here. The mark advances ONLY on the
                     // Update's COMMIT path below — where LastReleaseRequestHandledAt
                     // is actually stamped. Advancing eagerly at dispatch time lost
@@ -3271,7 +3308,7 @@ internal static class NodeTypeCompilationHelpers
                                     "[ReleaseRequestWatcher] {HubPath}: release request absorbed — a "
                                     + "compile is already in flight for these exact inputs, so it "
                                     + "produces what this request asks for", hubPath);
-                                dispatchHighWater.Advance(triggerAt);
+                                AdvanceHighWater();
                                 return curr with
                                 {
                                     Content = def with
@@ -3308,7 +3345,7 @@ internal static class NodeTypeCompilationHelpers
                                 "[ReleaseRequestWatcher] {HubPath}: release request satisfied by the "
                                 + "existing current build (adopted or already compiled) — no compile "
                                 + "dispatched", hubPath);
-                            dispatchHighWater.Advance(triggerAt);
+                            AdvanceHighWater();
                             return curr with
                             {
                                 Content = def with
@@ -3324,7 +3361,7 @@ internal static class NodeTypeCompilationHelpers
                         // COMMIT: this is the one path that stamps
                         // LastReleaseRequestHandledAt — advance the in-memory
                         // high-water in the same breath so the two marks never diverge.
-                        dispatchHighWater.Advance(triggerAt);
+                        AdvanceHighWater();
                         // Stamp WHAT this dispatch is for, on the same commit that flips to
                         // Pending, so a later trigger for the same inputs can be recognised as
                         // already satisfied instead of queued behind it. Since #3390 that is the

@@ -87,7 +87,7 @@ public sealed record InstanceKeyResolutionSnapshot(
     /// carries no instance, and a definitive negative is one that is neither unavailable nor
     /// resolved.</summary>
     internal InstanceKeyResolutionSnapshot With(InstanceAuthResult outcome, DateTimeOffset at) =>
-        outcome.IsUnavailable
+        outcome.IsUnavailable || outcome.StoreUnavailable
             ? this with
             {
                 Unavailable = Unavailable + 1, LastUnavailableAt = at, LatestUnavailable = true, LatestAt = at,
