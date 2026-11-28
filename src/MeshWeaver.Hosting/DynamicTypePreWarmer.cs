@@ -1142,6 +1142,19 @@ public static class DynamicTypePreWarmer
             .Select(e => e.TypePath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        // 🚨 A HELD type (its last build keeps serving over a declined release) is re-judged on every
+        // boot (BuildDeliveryHold / DeclinedReleaseLedger): its record claims a usable build, so the
+        // sweep used to count it baked and never activate it, and a decline whose cause had gone (a
+        // bundle published, the floor reached, a platform roll) stood until somebody pressed Compile.
+        // It goes through the compile watcher, whose adoption pass lifts the hold if a bundle is
+        // there now and re-states it, unchanged, if not.
+        var heldRejudge = definitions
+            .Where(kv => BuildDeliveryHold.IsHeld(kv.Value) && baked.Contains(kv.Key))
+            .Select(kv => kv.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var held in heldRejudge)
+            baked.Remove(held);
+
         var bytesMissing = report.BytesMissing
             .Select(e => e.TypePath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -1394,6 +1407,16 @@ public static class DynamicTypePreWarmer
                     // boot here and was PARKED only when a later Pending flip reached the watcher —
                     // on the same pod, with the same bundle in place. It is handed to the compile
                     // watcher instead, whose gate is then the only thing that decides it.
+                    if (heldRejudge.Contains(p))
+                    {
+                        progress?.Invoke(
+                            $"re-judging held NodeType {p} through the compile watcher: waiting for up to {budget}");
+                        return DriveThroughCompileWatcher(mesh, workspace, accessService, p, budget, logger)
+                            .SelectMany(o => ReclassifyIfAdoptedHere(mesh, o, definitions, nodes, budget, logger))
+                            .SelectMany(o => ReclassifyIfRemoved(mesh, o, logger))
+                            .Do(o => FileForDependents(p, o));
+                    }
+
                     if (gate.Refused.Contains(p))
                     {
                         progress?.Invoke(
