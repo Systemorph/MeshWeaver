@@ -1283,7 +1283,7 @@ passes against both behaviours, landed first — the expand-then-contract order.
 
 ### Where its teeth stop
 
-- **MeshWeaver.Plugins only.** Education, Reinsurance, SocialMedia, Crm and Manufacturing still find
+- **MeshWeaver.Plugins only.** Education, Reinsurance, SocialMedia and Manufacturing still find
   a core break in their own daily run.
 - **No `-warnaserror`** on the candidate build: a new obsoletion is a warning there, so shape 2 (an
   ambiguous `<see cref>`, an error only under warnings-as-errors) is still caught by the dependent's

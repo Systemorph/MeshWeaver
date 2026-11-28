@@ -116,7 +116,7 @@ def resolve_root(explicit: str | None) -> Path:
     fetches this file into `$RUNNER_TEMP` and runs it against the CALLER's checkout, so that
     expression resolved to `/home/runner/work` and every git command died with
     `fatal: not a git repository`. The lane was therefore red on 5 of 5 runs in each of Education,
-    Reinsurance, SocialMedia, Manufacturing and Crm from the hour it was adopted, having resolved
+    Reinsurance, SocialMedia and Manufacturing from the hour it was adopted, having resolved
     nothing; Plugins stayed green only because its own copy still runs in-tree.
 
     So the root is taken from `--root`, else the working directory, and is PROVEN to be a git work

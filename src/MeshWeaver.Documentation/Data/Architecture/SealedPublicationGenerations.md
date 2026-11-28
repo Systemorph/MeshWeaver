@@ -567,8 +567,8 @@ flat" is the mistake it used to invite, and the comment above it now says so.
 which publisher each producer is RUNNING** — a producer resolving a `publish-bake-bundles.sh` that
 predates [#4249](https://github.com/Systemorph/MeshWeaver/pull/4249) still refreshes the flat copy
 in place and never moves the pointer. That is the one thing that had to be true before flipping and
-it is checkable rather than assumed. **Measured 2026-09-14 across all six node repos** — Plugins,
-Crm, Education, Reinsurance, SocialMedia, Manufacturing — every `uses:` of a `node-repo-*.yml` lane
+it is checkable rather than assumed. **Measured 2026-09-14 across the node repos** — Plugins,
+Education, Reinsurance, SocialMedia, Manufacturing — every `uses:` of a `node-repo-*.yml` lane
 is `@main` and every `scripts-ref:` is `main`. **No pinned publisher and no pinned reader of this
 prefix exists in the fleet.** The exception is core's own `plugins-bake`, which passes no
 `scripts-ref` and so resolves its scripts at `platform-ref` = the commit the run publishes; on a

@@ -235,7 +235,7 @@ re-read on 2026-10-11:
 
 | Consumer | Calls the resolver | Reads `plugins` under the resolved identity | Could skip the wait |
 |---|---|---|---|
-| MeshWeaver.Education, .Reinsurance, .SocialMedia, .Manufacturing, .Crm, .FundReporting | yes | **yes** — `upstream-seed` / `upstream-sources` name `plugins` | no: skipping it is the 2026-09-10 red |
+| MeshWeaver.Education, .Reinsurance, .SocialMedia, .Manufacturing, .FundReporting | yes | **yes** — `upstream-seed` / `upstream-sources` name `plugins` | no: skipping it is the 2026-09-10 red |
 | core `node-repo-gate.yml`, `node-repo-publish-bake.yml` | yes, when the caller pins no digest | the caller's own `upstream-seed` — these lanes serve the rows above | no |
 | Memex | no | — | not applicable |
 | MeshWeaver.Plugins | yes | **no** — it declares no upstream; it *is* the `plugins` publication | the only candidate |

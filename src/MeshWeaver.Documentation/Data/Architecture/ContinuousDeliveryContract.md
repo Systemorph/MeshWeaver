@@ -1003,7 +1003,7 @@ here: it gates no later job.
 
 **`satellite-compat` (2026-09-12) — every core build MEASURES every satellite, none of them blocks
 it.** The fleet assumes the platform is backwards compatible within a major, so the satellites
-(SocialMedia, Crm, Reinsurance, Education, Manufacturing; Plugins was built inside this run until #6143) rebuild
+(SocialMedia, Reinsurance, Education, Manufacturing; Plugins was built inside this run until #6143) rebuild
 once a day rather than on every platform build — which took away the only per-build evidence that a
 core merge did not break them. This job is the counterweight: after `promote`, one leg per satellite
 in parallel runs the same reusable compile gate the satellites run on their own pull requests
@@ -1076,14 +1076,14 @@ register release and publish event"*) is three sentences:**
    source. A bundle publication concerns only what depends on it, so `meshweaver-upstream-published`
    goes to the **registered repositories whose declared upstreams name the publishing source — never
    the publisher itself, never a repository that does not depend on it** (the graph is directed:
-   Reinsurance depends on Crm, never the reverse, and nothing depends on itself), and a re-registration
+   Reinsurance depends on Plugins, never the reverse, and nothing depends on itself), and a re-registration
    of an identity + digest already on record is the same sealed bytes, **not an event**. The
    subscribers' CI receives it, resolves both images from the payload, builds and publishes for that
    identity — and ends by calling the control instance (1).
    🚨 No longer true since 2026-09-12 (phase 1) for the platform event: `meshweaver-framework-released` is broadcast only while `Hosting:PlatformBuilds:BroadcastFrameworkReleases` is `true` (default off, Plugins#1707) and no satellite lists the type; a node repo follows the platform by its daily `schedule` against the newest SEALED set. `meshweaver-upstream-published` is unchanged. See `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins).
 
    🚨 **Why the audience is a rule and not a list (2026-09-07, MeshWeaver.Plugins#1484).** Until that
-   day a publication was fanned out to the RELEASE audience. Crm published → the control instance woke Crm and
+   day a publication was fanned out to the RELEASE audience. a satellite published → the control instance woke it and
    Reinsurance → both rebaked unchanged inputs, sealed the same digest and registered it again →
    the control instance woke both again: one crm digest broadcast 8–10 times, a run on each satellite every 3–5 s,
    100+ runs per satellite in an hour, the App's API limit exhausted, the organisation's Actions

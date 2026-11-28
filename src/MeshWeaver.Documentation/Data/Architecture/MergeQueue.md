@@ -277,8 +277,8 @@ satellite reaches it through `workflow_call`, so the hole was open in every repo
 
 🚨 **But "the satellites get it for free" is true only where the caller pins `@main`, and one does
 not.** Measured 2026-09-11 over the contents API (never a local clone — satellite checkouts here run
-days stale): all seven callers exist, and six pin `auto-arm.yml@main` — MeshWeaver.Plugins,
-.Reinsurance, .SocialMedia, .Education, .Crm, .Manufacturing — so a core fix lands there on merge.
+days stale): all six remaining callers exist, and five pin `auto-arm.yml@main` — MeshWeaver.Plugins,
+.Reinsurance, .SocialMedia, .Education, .Manufacturing — so a core fix lands there on merge.
 **`Systemorph/Memex` pins a SHA** (`@c7fef7a2`, 971 commits behind core's `main` when measured), so
 it picks up nothing until that line moves. The lesson generalises past this fix: before claiming a
 reusable-lane change reaches the fleet, read every caller's `uses:` ref — a fleet-wide fix and a

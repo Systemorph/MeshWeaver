@@ -112,7 +112,7 @@ The owner decided on a dedicated `main3` branch for the v3 line, with `main` the
 applies to MeshWeaver.Plugins too. Core CD builds the portal and control images against a Plugins
 commit (`gate.outputs.plugins_sha`), so the v3 line's CD takes that commit from Plugins
 **`main3`** and the v4 line's from Plugins `main`. No image ever mixes majors, and v3 stays a
-real line that a fix can still land on, not a frozen commit. Every PLUGIN repository gets a `main3` as well: MeshWeaver.Plugins and each satellite (Education, Reinsurance, SocialMedia, Manufacturing, Crm, FundReporting). Each `main3` calls core's lanes `@main3`, and each `main` calls them `@main` once it has opted into v4. In-mesh modules are baked per live framework identity (policy
+real line that a fix can still land on, not a frozen commit. Every PLUGIN repository gets a `main3` as well: MeshWeaver.Plugins and each satellite (Education, Reinsurance, SocialMedia, Manufacturing, FundReporting). Each `main3` calls core's lanes `@main3`, and each `main` calls them `@main` once it has opted into v4. In-mesh modules are baked per live framework identity (policy
 `bake-per-live-identity`), so v3 instances keep receiving bundles built for `c003…`.
 
 ## 4a. Versions follow the line

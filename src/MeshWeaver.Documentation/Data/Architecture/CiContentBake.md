@@ -1093,7 +1093,7 @@ set that did not publish), is unchanged, and the two never touch each other's is
 **`node-repo-retry-transients.yml` is the ONE retry steward — core and every satellite call it.** A
 red run whose every failed job is proven infrastructure is re-run once; anything unproven stays red
 and the decline names the job. The satellites used to carry the steward as hand-copied inline
-shell, and the copies drifted: Manufacturing, Reinsurance and Crm read job **logs** only, so a
+shell, and the copies drifted: Manufacturing and Reinsurance read job **logs** only, so a
 self-hosted runner death — which uploads no log (`/logs` answers 404) and leaves its reason only in
 the job's check-run **annotation**, *"The self-hosted runner lost communication with the server"* —
 was declined every time with *"GitHub holds no log (HTTP 404) — cannot prove a transient, no
@@ -1150,9 +1150,9 @@ does not run it. Measured against every satellite's `main`, 2026-09-07:
 it is the only pre-existing caller whose pin carried the guard from the start, and it was the only
 pre-existing caller at zero. Every other row was a repository that *called the lane* and was *not
 checked by it* — until the pin moved. The arrows record the move (MeshWeaver#3576), re-measured
-the same afternoon with the guard at core `main` against each repo's `origin/main`: 8/8 secrets
-asserted on Crm, 9/9 on SocialMedia, 6 of 8 reachable on Education with none unasserted — 0
-violations on all three. 🚨 A caller whose lane sha carries the guard but whose paired
+the same afternoon with the guard at core `main` against each repo's `origin/main`: 9/9 secrets
+asserted on SocialMedia, 6 of 8 reachable on Education with none unasserted — 0
+violations on both. 🚨 A caller whose lane sha carries the guard but whose paired
 `platform-ref` does not is STILL not checked: the lane fetches the guard at `platform-ref`, and
 answers "a pin older than the guard needs the older lane" (Education#278, a Dependabot bump of
 the lane alone, red for exactly this) — which is why the two move in ONE commit.

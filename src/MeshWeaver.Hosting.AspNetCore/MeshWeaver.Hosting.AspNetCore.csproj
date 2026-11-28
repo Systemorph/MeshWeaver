@@ -11,6 +11,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
   </ItemGroup>
 
   <ItemGroup>

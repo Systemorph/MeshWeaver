@@ -370,7 +370,7 @@ name: node-repo module pack
 # sampled `Module bundles / Module bundle` legs at a MEDIAN of 1.1 min (p90 8.4) across 40
 # variants, 1,385 `Module bundles` parent legs at 1.1 min, 2,935 `Module tests` legs at 4.0 min
 # (p90 8.2). Whole-minute rounding on the sub-minute legs was ≈12 % of Plugins' bill (~4,700
-# billed minutes a day) and 25–40 % in Crm / Reinsurance / SocialMedia. Each leg also paid its
+# billed minutes a day) and 25–40 % in Reinsurance / SocialMedia. Each leg also paid its
 # own checkout, SDK install and cache restores before a second of module work.
 #
 # So `pack` and `tests` now expand ONE LEG PER BATCH of `batch-size` modules (default 6, hard cap

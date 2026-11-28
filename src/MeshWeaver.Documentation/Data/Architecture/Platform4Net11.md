@@ -49,7 +49,7 @@ builds against an older platform (policy `request-min-version-wait-until-deploye
 1. **Core** merges and seals the first `4.0.<run>` set.
 2. **MeshWeaver.Plugins** retargets, updates its own pins and raises its platform floor to that
    sealed set in the same pull request. Its run waits until a build server carrying 4.0 is deployed.
-3. **The satellites** (Education, Reinsurance, SocialMedia, Manufacturing, Crm, FundReporting) do
+3. **The satellites** (Education, Reinsurance, SocialMedia, Manufacturing, FundReporting) do
    the same against the sealed Plugins publication, then re-bake their modules.
 4. **MeshWeaver.Deploy** and **Memex** retarget their tooling.
 5. **Instances.** The control instance's record moves to `updatePattern: "4.*"` first and is

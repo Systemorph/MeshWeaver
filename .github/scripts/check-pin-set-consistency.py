@@ -153,13 +153,13 @@ ASSIGN_RE = re.compile(
     re.MULTILINE,
 )
 
-# Shape 2 — a shell assignment into $GITHUB_OUTPUT. SocialMedia and Crm pin their tester digest
+# Shape 2 — a shell assignment into $GITHUB_OUTPUT. SocialMedia (and a since-archived repo) pin their tester digest
 # this way, which is invisible to any scan of `env:` blocks.
 #
 # 🚨 IT MATCHES AN ATTEMPTED DIGEST, NOT A WELL-FORMED ONE, and that is the whole point. This gate's
 # own first draft required `sha256:[0-9a-f]{64}` here, and the both-ways falsification on the REAL
 # ci.yml of the three repos it was written for caught it: `image-digest=sha256:PLACEHOLDER` matched
-# NOTHING, so SocialMedia and Crm — whose tester pin is written exactly this way — went GREEN over a
+# NOTHING, so SocialMedia and a since-archived repo — whose tester pin is written exactly this way — went GREEN over a
 # placeholder while Manufacturing (whose tester pin is an `env:` key) went red. The vacuity trap
 # this file exists to close, reproduced inside it, in the shape the file itself had not covered.
 # Classification into pin / MALFORMED happens below, once, for both shapes.
@@ -234,7 +234,7 @@ PLATFORM_REF_NAME_RE = re.compile(r"(?i)platform.?ref")
 ROLE_ALIASES: dict[str, str] = {
     # Plugins, Reinsurance, Manufacturing: the tester image the gates run inside.
     "MW_IMAGE_DIGEST": "mw-plugin-test",
-    # SocialMedia, Crm: the same pin, written into a $GITHUB_OUTPUT by the `pin` step.
+    # SocialMedia: the same pin, written into a $GITHUB_OUTPUT by the `pin` step.
     "image-digest": "mw-plugin-test",
     # Plugins, Reinsurance: the portal image every module compiles against (core #940).
     "MW_PORTAL_IMAGE_DIGEST": "memex-portal-ai",
@@ -927,7 +927,7 @@ HALF_MOVED = CONSISTENT.replace(
     "  MW_IMAGE_DIGEST: sha256:PLACEHOLDER",
 ).replace(
     # I4 in the OTHER shape — the same placeholder inside a $GITHUB_OUTPUT, which is how
-    # SocialMedia and Crm write their tester pin. This case is here because the real-input
+    # SocialMedia writes its tester pin. This case is here because the real-input
     # falsification caught this file passing it green; a fixture that only carries the `env:`
     # shape proves the gate for Manufacturing and for neither of the other two.
     'echo "image-digest=sha256:642f686fed743289ca1211b73bf8091c5d7deaaa3d4435746a4868b653e4fc8c"',
@@ -1024,7 +1024,7 @@ def self_test() -> int:
     # this gate was written for.
     if len({m.name for m in bad.malformed}) < 2:
         failures.append("only ONE shape of pin-shaped-but-not-a-digest was detected; the "
-                        "$GITHUB_OUTPUT shape is how SocialMedia and Crm write their tester pin")
+                        "$GITHUB_OUTPUT shape is how SocialMedia writes its tester pin")
 
     # ── ARM B2: the source ref moved alone, so nothing else in the file names it. ───────────────
     orphaned = _scan_of(CONSISTENT.replace(
