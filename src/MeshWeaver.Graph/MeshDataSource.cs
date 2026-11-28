@@ -1026,7 +1026,7 @@ public static class MeshDataSourceExtensions
     /// <returns>The states to post, newest only.</returns>
     internal static IObservable<MeshNode> OwnSaveTicks(
         IObservable<MeshNode> gatedOwn, IObservable<System.Reactive.Unit> nudges, PendingOwnSave pending,
-        IObservable<long>? ticks, TimeSpan interval)
+        IObservable<long>? ticks, TimeSpan interval, System.Reactive.Concurrency.IScheduler? scheduler = null)
     {
         var triggers = gatedOwn
             // 🚨 Track every save-worthy state BEFORE the Sample buffer: the dispose-time
@@ -1036,11 +1036,53 @@ public static class MeshDataSourceExtensions
             .Select(_ => System.Reactive.Unit.Default)
             .Merge(nudges)
             .Merge(pending.RefusalNudges);
-        return (ticks is null ? triggers.Sample(interval) : triggers.Sample(ticks))
+        return (ticks is null ? triggers.SampleWhenPending(interval, scheduler) : triggers.Sample(ticks))
             .Select(_ => pending.TakeUnsaved())
             .Where(node => node is not null)
             .Select(node => node!);
     }
+
+    /// <summary>
+    /// <see cref="Observable.Sample{TSource}(IObservable{TSource}, TimeSpan)"/> without the timer that runs
+    /// while nothing is pending: a one-shot window opens at the first trigger after a quiet period and
+    /// emits once when it closes (#5388).
+    ///
+    /// <para><b>The defect this removes.</b> <c>Sample(interval)</c> arms a PERIODIC timer at subscribe
+    /// and keeps it for the life of the subscription, firing every <paramref name="interval"/> whether or
+    /// not a value arrived. Every own-node persistence sampler (one per node hub) therefore queued a
+    /// thread-pool item five times a second for as long as the hub lived. On memex-cloud (portal 4.0.14377,
+    /// 2026-11-28) the queue census named it: 3,535 of 4,091 and 2,613 of 3,699 queued items were
+    /// <c>PeriodicTimer =&gt; MeshDataSourceExtensions.OwnSaveTicks</c>, and the pool completed 100,000-250,000
+    /// items per 10 s of mostly empty ticks.</para>
+    /// </summary>
+    internal static IObservable<System.Reactive.Unit> SampleWhenPending<T>(
+        this IObservable<T> triggers, TimeSpan interval, System.Reactive.Concurrency.IScheduler? scheduler = null)
+        => Observable.Create<System.Reactive.Unit>(observer =>
+        {
+            var gate = new object();
+            var armed = false;
+            var window = new System.Reactive.Disposables.SerialDisposable();
+            var upstream = triggers.Subscribe(
+                _ =>
+                {
+                    lock (gate)
+                    {
+                        if (armed) return;
+                        armed = true;
+                    }
+
+                    window.Disposable = (scheduler is null ? Observable.Timer(interval) : Observable.Timer(interval, scheduler))
+                        .Subscribe(__ =>
+                        {
+                            // Closed BEFORE it emits: a trigger that lands while the downstream runs opens the next window.
+                            lock (gate) armed = false;
+                            observer.OnNext(System.Reactive.Unit.Default);
+                        });
+                },
+                observer.OnError,
+                observer.OnCompleted);
+            return new System.Reactive.Disposables.CompositeDisposable(upstream, window);
+        });
 
     /// <summary>
     /// Dispatches one own save (#6856): the save is RESERVED (marked requested) BEFORE it is posted,
