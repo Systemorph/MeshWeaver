@@ -295,7 +295,19 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
             try
             {
                 dumpWriter(path);
-                return;
+                // The runtime reports a createdump that aborted (a thread it meant to attach to had
+                // exited — ptrace ATTACH "No such process") as a SUCCESS, with no file written and
+                // no exception. That is the same race the catch below cures, so a fresh dump is
+                // taken; a file that is there is returned and EnsureWritten still checks it whole.
+                if (File.Exists(path))
+                    return;
+                failures = failures.Add(new InvalidOperationException(
+                    $"the dump writer reported success but wrote no file at '{path}' (attempt {attempt})"));
+                if (attempt >= MaxDumpAttempts)
+                    throw new InvalidOperationException(
+                        $"every one of {MaxDumpAttempts} dumps of process {Environment.ProcessId} ended without a file: "
+                        + string.Join(" | ", failures.Select((f, i) => $"attempt {i + 1}: {f.Message.Trim()}")),
+                        new AggregateException(failures));
             }
             catch (Exception ex) when (IsVanishedThread(ex))
             {

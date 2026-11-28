@@ -1462,6 +1462,21 @@ with nothing wrong (#1105):
   question on the emission, but the lambda runs on the owner's *current* node, which can be earlier
   in an install than the emission was.
 
+**Across a version move, an absent bundle path is a deletion, not an arrival.** The #4280 path
+witness waits for every path the bundle names. That is right while the bundle and the live source
+are the same release, and wrong once the live source is a strictly newer module release
+(`CanJudgeAdoption` with `adoptedModuleVersion`/`currentModuleVersion`, `BundleIsAnOlderRelease`):
+a path the newer release deleted or renamed never lands, so the judgement deferred for as long as
+the old bundle stood. Measured on the company instance, 2026-11-28: `Crm/Counterparty` on 4.2
+source kept serving the 4.0.10 bundle as `AdoptedVerified` through two governed provisions. 4.2 had
+renamed two shared sources that the 4.0.10 bundle names, so the seeder's pre-write decline deferred,
+each release's non-forced compile re-adopted 4.0.10, and the owner's stamp deferred too. Now, when
+the live source is the newer release, the path witness and the include-presence witness are
+skipped and the fingerprints are judged (an include closure not computed yet still defers):
+the seeder declines the stale bundle, and the owner records `StaleAdopted` or `AdoptionRefused` and
+compiles the live source. Within one release, and whenever either version is unknown, the deferral
+stands unchanged. Pinned by `AdoptionIsJudgedPastPathsANewerReleaseDeletedTest`.
+
 In both cases the next emission is the one that should fulfil the request. The mark reported it as a
 failure instead. Measured on the public instance: `Store/Order` logged the Error at 2026-09-22
 22:54:24Z. A read 74 s later showed `requestedSourceStampAt` absent,
@@ -3802,6 +3817,17 @@ compilation, no re-emit) → fix roots first, since one red upstream reports as 
 dependent → re-check until every type reads `Ok`. Warnings are in scope: an unregistered `$type`
 leaves content as an untyped `JsonElement`, which renders **empty** rather than erroring. The full
 protocol lives in the `/code` skill.
+
+---
+
+## 🚨 A declined release request is re-judged when its cause moves
+
+A delivery gate that answers a release request by keeping the last build (`BuildDeliveryHold.Settle`, the record names the reason in `deliveryHoldReason`) does not make the request *handled* for good. A held type (`StaleAdopted` / `AdoptionRefused`) is judged again whenever the inputs its decline was formed under change: a source publication, a module-set change (a new bundle), a platform roll. The rule is `DeclinedReleaseLedger`, asked by two callers:
+
+- **The release watcher** re-judges a held record whose live inputs (`BuildInputsToken`: framework, module-set hash, published source versions) differ from the ones this process last judged it under, or that this process has not judged yet.
+- **The boot sweep** (`DynamicTypePreWarmer`) no longer counts a held type as baked; it goes through the compile watcher, whose adoption pass lifts the hold if a bundle is there now and restates it unchanged if not.
+
+It never loops: the inputs are claimed before the judgement is dispatched, so an unchanged input cannot re-fire it, and a decline that declines again settles. Re-judging costs the adoption pass, not a Roslyn compile.
 
 ---
 
