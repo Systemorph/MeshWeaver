@@ -123,17 +123,49 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
         LazyInitializer.EnsureInitialized(ref outcomes, () => new InstanceKeyResolutionTally(() => DeadlineScheduler.Now));
 
     /// <summary>
-    /// Retained for source compatibility with callers compiled outside this repository (in-mesh
-    /// control planes cannot be swept from here). Since #3119 there is NO verdict to forget: every
-    /// request reads the index, instance and grant nodes off their live mirrors, so a plan promotion
-    /// or a disable written through <c>GetMeshNodeStream(path).Update(...)</c> is visible to the next
-    /// request on EVERY replica the moment the change feed delivers it — the cross-replica lag #2804
-    /// worked around no longer exists. This method therefore does nothing.
+    /// How long a VERIFIED key is remembered as the fallback for a store read that reached no verdict.
+    /// Minutes, not seconds: a registry under cluster churn must not tell a genuine key 503 because
+    /// one lookup is slow. The store is still read on every request and always wins when it answers;
+    /// only a verified instance is ever remembered — never an unknown key, a disabled instance or an
+    /// unavailable read — and <see cref="Invalidate"/> drops an entry the moment its key is revoked.
+    /// Init-only so a test can drive expiry on virtual time.
     /// </summary>
-    /// <param name="keyHash">Ignored.</param>
+    internal TimeSpan VerifiedKeyTtl { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// A soft cap on remembered keys. Past it, expired entries go first and then the soonest to
+    /// expire, so a newly verified key is always remembered; the check is not atomic with the add,
+    /// so a burst of distinct keys can briefly exceed it by the number of concurrent verifications.
+    /// </summary>
+    private const int MaxVerifiedKeys = 1024;
+    private readonly ConcurrentDictionary<string, (AuthenticatedInstance Instance, DateTimeOffset Expires)> verified
+        = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Forgets the verified answer for a key hash. Call it when a key is revoked, rotated away or its
+    /// instance is disabled, so the revoke takes effect on this replica at once instead of after
+    /// <see cref="VerifiedKeyTtl"/>. A hash that is not cached is a no-op.
+    /// </summary>
+    /// <param name="keyHash">The hash of the key (see <see cref="InstanceKeys.Hash"/>).</param>
     public void Invalidate(string keyHash)
     {
-        // Intentionally empty — see the summary. There is no cache behind this class any more.
+        if (!string.IsNullOrEmpty(keyHash))
+            verified.TryRemove(keyHash, out _);
+    }
+
+    private void Remember(string hash, AuthenticatedInstance instance)
+    {
+        var now = DeadlineScheduler.Now;
+        if (verified.Count >= MaxVerifiedKeys && !verified.ContainsKey(hash))
+        {
+            foreach (var (key, entry) in verified)
+                if (entry.Expires <= now)
+                    verified.TryRemove(key, out _);
+            if (verified.Count >= MaxVerifiedKeys
+                && verified.OrderBy(kv => kv.Value.Expires).Select(kv => kv.Key).FirstOrDefault() is { } soonest)
+                verified.TryRemove(soonest, out _);
+        }
+        verified[hash] = (instance, now + VerifiedKeyTtl);
     }
 
     /// <summary>
@@ -462,6 +494,32 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     }
 
     private IObservable<InstanceAuthResult> Resolve(string hash)
+    {
+        // The store stays the authority: every request reads it, so a grant change or a disable is
+        // decided with at once (RegistryAuthenticationOpensNoReadPerRequestTest). The verified answer
+        // is the FALLBACK for a request whose store read reached no verdict — a slow or churning
+        // lookup then costs a genuine key nothing, and 503 is answered only when the store is
+        // unreachable AND this key was not verified inside the window.
+        return ResolveFromStore(hash)
+            .Do(result =>
+            {
+                if (result.Instance is { } instance)
+                    Remember(hash, instance);
+                else if (!result.IsUnavailable)
+                    // A DEFINITIVE negative (key revoked, instance disabled, grant removed): the store
+                    // just refused it, so the remembered answer must not outlive that verdict and
+                    // serve the key during a later outage.
+                    verified.TryRemove(hash, out _);
+            })
+            .Select(result =>
+                result.IsUnavailable
+                && verified.TryGetValue(hash, out var hit)
+                && hit.Expires > DeadlineScheduler.Now
+                    ? InstanceAuthResult.Resolved(hit.Instance) with { StoreUnavailable = true }
+                    : result);
+    }
+
+    private IObservable<InstanceAuthResult> ResolveFromStore(string hash)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var indexPath = $"{MeshWeaverInstanceNodeType.IndexNamespace}/{InstanceKeys.HashPrefix(hash)}";
@@ -1020,6 +1078,10 @@ public sealed record InstanceAuthResult
 
     /// <summary>True when resolution reached NO verdict — retryable, never "unknown key".</summary>
     public bool IsUnavailable => UnavailableReason is not null;
+
+    /// <summary>True when the store reached no verdict and the answer is the brief fallback of a key
+    /// verified moments ago. The caller is served; the health line still counts it unavailable.</summary>
+    internal bool StoreUnavailable { get; init; }
 
     /// <summary>The resolution completed; <paramref name="instance"/> is the answer (possibly a
     /// definitive <c>null</c>).</summary>

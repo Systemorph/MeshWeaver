@@ -82,6 +82,14 @@ public sealed class DisposalDrainLane : IDisposalDrainScheduler, IDisposable
     public int ActiveDrains => running.Count;
 
     /// <inheritdoc />
+    public string DescribeState()
+    {
+        // Lock-free reads except the two short lock(_tasks) gauges: this runs inside a stall verdict.
+        return $"lane state: liveThreads={scheduler.LiveDrainLoops}/{MaxThreads}, parkedThreads={scheduler.ParkedLaneThreads}, "
+            + $"drainsRunning={running.Count}, tasksQueued={scheduler.QueuedTasks}";
+    }
+
+    /// <inheritdoc />
     public IDisposable TrackDrain(string hubAddress, Func<string?> currentTurn)
     {
         var id = Interlocked.Increment(ref nextId);

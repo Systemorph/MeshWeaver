@@ -1017,7 +1017,13 @@ internal static class NodeTypeCompilationHelpers
                                             ? SettleAsHold(pendingDefinition, reason, reasonText)
                                             : SettleAsUnknownMembershipHold(pendingDefinition, reason, reasonText))
                                         return;
-                                    logger?.LogError(
+                                    // A bundle for THIS identity names the type and was DECLINED by a designed rule
+                                    // (a platform floor above the running build, a source fingerprint): the old
+                                    // platform keeping the old build is the intended outcome of a mixed-version
+                                    // rollout, so it is a Warning that states the reason. No bundle at all is the
+                                    // gap nobody has filled — that stays an Error.
+                                    logger?.Log(
+                                        offeredByBundle ? LogLevel.Warning : LogLevel.Error,
                                         "Compile watcher: {HubPath} is a module's content (or of unknown "
                                         + "membership: {Unknown}; declared module version without an install "
                                         + "record: {Declared}) in a partition this mesh does not track, and "
@@ -1504,6 +1510,15 @@ internal static class NodeTypeCompilationHelpers
             && !IsStaticOnlyNodeType(node, def);
         var failedVerdictKickoffSub = ownStream
             .Where(FailedVerdictWantsRedrive)
+            // 🚨 A replica BELOW the package's dependency floor forms no verdict (#6195), so a re-drive
+            // it flips would only end at Unavailable ("compile NOT ATTEMPTED") — and each such flip
+            // spent one of the automatic attempts, so a mixed-version rollout burned the whole budget
+            // and left the type to a human with the Compile button (measured: attempts 8-9 of 8 on a
+            // replica one patch below the floor). It waits instead, spending nothing — and the gate sits BEFORE the dedupe, so a trigger it swallowed is not remembered as seen: a replica that
+            // meets the floor re-drives the type, and this one does so once its own platform arrives.
+            .SelectMany(node => MeetsDependencyFloorHere(hub, hubPath, "failed-verdict re-drive", logger)
+                .Where(eligible => eligible)
+                .Select(_ => node))
             // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
             // still in flight; correctness is the re-check inside the Update lambda, not this.
             //
@@ -1708,8 +1723,11 @@ internal static class NodeTypeCompilationHelpers
     /// nothing is dispatched off a set still being written.</para>
     ///
     /// <para><b>Its residue, also named.</b> A path DELETED upstream after the bundle was baked is
-    /// absent from the live set forever, so from here the judgement defers for as long as that
-    /// bundle stands. It is bounded by the install's own release request: that fold re-judges
+    /// absent from the live set forever. Across a module-version move that is now judged rather
+    /// than deferred (see the overload taking the module versions — the 2026-11-28
+    /// <c>Crm/Counterparty</c> measurement showed the bound below does NOT hold, because the
+    /// release's non-forced compile re-adopts the same bundle). Within one release the judgement
+    /// still defers for as long as that bundle stands. It is bounded by the install's own release request: that fold re-judges
     /// after the install completes and, on a mesh that compiles module content, an
     /// <c>IsDirty</c> record compiles the live (complete) set and replaces the adopted build; on
     /// a mesh that does not, the adopted build keeps serving as it would have as StaleAdopted —
@@ -1724,7 +1742,8 @@ internal static class NodeTypeCompilationHelpers
         NodeTypeDefinition def, IReadOnlyDictionary<string, long>? liveSources)
         => CanJudgeAdoption(
             def.AdoptedSourceFingerprint, def.CurrentSourceFingerprint, liveSources,
-            def.AdoptedSourcePaths, def.AdoptedSourceIncludes, def.CurrentSourceIncludes);
+            def.AdoptedSourcePaths, def.AdoptedSourceIncludes, def.CurrentSourceIncludes,
+            def.AdoptedModuleVersion, def.CurrentModuleVersion);
 
     /// <summary>
     /// 🚨 #4280 (second finding on #4293) — the <c>@@</c>-include paths the adopted bytes were
@@ -1855,6 +1874,45 @@ internal static class NodeTypeCompilationHelpers
         IReadOnlyCollection<string>? adoptedSourcePaths,
         IReadOnlyCollection<string>? adoptedSourceIncludes,
         IReadOnlyCollection<string>? currentSourceIncludes)
+        => CanJudgeAdoption(adoptedFingerprint, liveFingerprint, liveSources, adoptedSourcePaths,
+            adoptedSourceIncludes, currentSourceIncludes,
+            adoptedModuleVersion: null, currentModuleVersion: null);
+
+    /// <summary>
+    /// <see cref="CanJudgeAdoption(string, string, IReadOnlyDictionary{string, long}, IReadOnlyCollection{string}, IReadOnlyCollection{string}, IReadOnlyCollection{string})"/>
+    /// with the two MODULE VERSIONS as the witness that tells an ARRIVAL from a DELETION.
+    ///
+    /// <para>🚨 The #4280 path witness reads a bundle path that is absent from the live set as "the
+    /// install is still writing it". That holds only while the bundle and the live source are the
+    /// SAME release. When the live source is a strictly NEWER module release than the bundle, a
+    /// path the bundle names and the live set lacks was deleted or renamed by that newer release:
+    /// it will never land, so waiting for it deferred the judgement for as long as that bundle
+    /// stood — every release request re-adopted the old bytes as <c>AdoptedVerified</c>, nothing
+    /// compiled the live source, and a recycle re-bound the same build. Measured on the company
+    /// instance, 2026-11-28: <c>Crm/Counterparty</c> served the 4.0.10 bundle over 4.2 source
+    /// through two provisions, because 4.2 renamed two shared sources the 4.0.10 bundle names.
+    /// So across a version move the path witness and the include-presence witness are skipped and
+    /// the fingerprints are judged (an include closure the owner has not computed yet still
+    /// defers — that is "unknown", not "absent"); a same-release race (#4280's measurement) still
+    /// defers exactly as before.</para>
+    /// </summary>
+    /// <param name="adoptedFingerprint">What the producer says these bytes were built from.</param>
+    /// <param name="liveFingerprint">The owner's published live fingerprint.</param>
+    /// <param name="liveSources">The live source snapshot — the witness.</param>
+    /// <param name="adoptedSourcePaths">The paths the bundle was built from, or null (legacy).</param>
+    /// <param name="adoptedSourceIncludes">The includes the bundle was compiled with, or null.</param>
+    /// <param name="currentSourceIncludes">The includes the owner resolved as present, or null.</param>
+    /// <param name="adoptedModuleVersion">The bundle's module version, or null when unknown.</param>
+    /// <param name="currentModuleVersion">The live source's module version, or null when unknown.</param>
+    internal static bool CanJudgeAdoption(
+        string? adoptedFingerprint,
+        string? liveFingerprint,
+        IReadOnlyDictionary<string, long>? liveSources,
+        IReadOnlyCollection<string>? adoptedSourcePaths,
+        IReadOnlyCollection<string>? adoptedSourceIncludes,
+        IReadOnlyCollection<string>? currentSourceIncludes,
+        string? adoptedModuleVersion,
+        string? currentModuleVersion)
     {
         if (adoptedFingerprint is not { Length: > 0 } adopted)
             return true;
@@ -1868,8 +1926,42 @@ internal static class NodeTypeCompilationHelpers
         // it was measured? Both halves — the query-resolved paths and the include closure —
         // ordered after the equality check for the same reason the empty witness is: an honest
         // match is an honest match whatever the lists say.
+        // Across a version move an absent path or include is a DELETION by the newer release, so
+        // neither witness waits for it — except an include closure the owner has not computed yet
+        // (null), which says nothing about presence and still defers.
+        if (BundleIsAnOlderRelease(adoptedModuleVersion, currentModuleVersion))
+            return adoptedSourceIncludes is not { Count: > 0 } || currentSourceIncludes is not null;
         return SourcePathsNotYetLive(adoptedSourcePaths, liveSources).Count == 0
                && SourceIncludesNotYetLive(adoptedSourceIncludes, currentSourceIncludes).Count == 0;
+    }
+
+    /// <summary>
+    /// Whether the live source is a strictly newer module release than the bundle — the one case in
+    /// which a bundle path absent from the live set is a DELETION by that release rather than an
+    /// arrival still in flight. Unknown on either side is not newer, so the #4280 deferral stands.
+    /// </summary>
+    internal static bool BundleIsAnOlderRelease(string? adoptedModuleVersion, string? currentModuleVersion)
+        => ReleaseCoreOf(currentModuleVersion) is { } current
+           && ReleaseCoreOf(adoptedModuleVersion) is { } adopted
+           && current.CompareTo(adopted) > 0;
+
+    /// <summary>MAJOR.MINOR.PATCH of a module version with absent components read as 0 — a source
+    /// root declares the series (<c>4.2</c>) while a bundle carries the release (<c>4.2.0</c>), and
+    /// <see cref="Version"/> alone orders <c>4.2</c> below <c>4.2.0</c>. Prerelease and build
+    /// metadata are ignored; an unparsable value is unknown (null).</summary>
+    private static (int Major, int Minor, int Patch)? ReleaseCoreOf(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return null;
+        var parts = version.Split('-', '+')[0].Split('.');
+        if (parts.Length is < 1 or > 3)
+            return null;
+        var numbers = new int[3];
+        for (var i = 0; i < parts.Length; i++)
+            if (!int.TryParse(parts[i], System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out numbers[i]))
+                return null;
+        return (numbers[0], numbers[1], numbers[2]);
     }
 
     /// <summary>
@@ -3119,6 +3211,11 @@ internal static class NodeTypeCompilationHelpers
         // Nullable<DateTimeOffset> local.
         var dispatchHighWater = new MonotonicHighWaterMark();
 
+        // 🚨 A DECLINED request is not a handled one (BuildDeliveryHold / DeclinedReleaseLedger): a
+        // held type is judged again when the inputs its decline was formed under moved, once per
+        // distinct input set, and never otherwise.
+        var declines = new DeclinedReleaseLedger();
+
         // 🚨 Gate on Status being SETTLED (Ok / Error / null) — never fire
         // while a compile is in-flight (Pending or Compiling). If we fired
         // mid-flight and just kept Status at Compiling (the old behaviour),
@@ -3143,7 +3240,9 @@ internal static class NodeTypeCompilationHelpers
             () => ownStream
             // ContentAs, never a type test: a definition that arrives as a JsonObject/JsonElement reads
             // as ABSENT to `is NodeTypeDefinition`, and a watcher that never matches never says so.
-            .Where(node => node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } def
+            .Where(node => (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } heldDef
+                    && declines.IsDue(heldDef, BuildInputsToken(ModulesHashOf(hub), heldDef.CurrentSourceVersions)))
+                || (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } def
                 && def.RequestedReleaseAt is { } req
                 // Strictly past our process-local COMMIT high-water — a flapped-back
                 // older value (or a duplicate emission of an already-committed
@@ -3159,7 +3258,7 @@ internal static class NodeTypeCompilationHelpers
                 // compile's own activity — age is only the floor.
                 && (def.CompilationStatus is not CompilationStatus.Pending
                                           and not CompilationStatus.Compiling
-                    || InFlightCompileIsStale(def, req) is not null)),
+                    || InFlightCompileIsStale(def, req) is not null))),
                 node =>
                 {
                     // 🚨 The trigger value OBSERVED by the Where for THIS emission.
@@ -3167,8 +3266,23 @@ internal static class NodeTypeCompilationHelpers
                     // def.RequestedReleaseAt re-read, which can have flapped back to
                     // an older value by the time the Update lambda runs on the
                     // action block (see the high-water comment above).
-                    if (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseAt
-                        is not { } triggerAt) return;
+                    var observed = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+                    var liveInputs = BuildInputsToken(ModulesHashOf(hub), observed?.CurrentSourceVersions);
+                    // The re-judgement of a held type whose decline inputs moved. A genuine request
+                    // (past both gates) is always an ordinary request; only a held record with no
+                    // request standing, or one already handled, is a re-judgement.
+                    var askedAt = observed?.RequestedReleaseAt;
+                    var kind = declines.Classify(
+                        observed, liveInputs, askedAt is { } at && dispatchHighWater.IsPast(at));
+                    if (kind == ReleaseTrigger.None) return;
+                    var rejudge = kind == ReleaseTrigger.Rejudge;
+                    var triggerAt = rejudge ? DateTimeOffset.UtcNow : askedAt ?? DateTimeOffset.UtcNow;
+                    void AdvanceHighWater()
+                    {
+                        // A re-judgement carries no request: advancing the mark to "now" would drop
+                        // a genuine request stamped a moment earlier but delivered later.
+                        if (!rejudge) dispatchHighWater.Advance(triggerAt);
+                    }
                     // 🚨 NO high-water advance here. The mark advances ONLY on the
                     // Update's COMMIT path below — where LastReleaseRequestHandledAt
                     // is actually stamped. Advancing eagerly at dispatch time lost
@@ -3271,7 +3385,7 @@ internal static class NodeTypeCompilationHelpers
                                     "[ReleaseRequestWatcher] {HubPath}: release request absorbed — a "
                                     + "compile is already in flight for these exact inputs, so it "
                                     + "produces what this request asks for", hubPath);
-                                dispatchHighWater.Advance(triggerAt);
+                                AdvanceHighWater();
                                 return curr with
                                 {
                                     Content = def with
@@ -3308,7 +3422,7 @@ internal static class NodeTypeCompilationHelpers
                                 "[ReleaseRequestWatcher] {HubPath}: release request satisfied by the "
                                 + "existing current build (adopted or already compiled) — no compile "
                                 + "dispatched", hubPath);
-                            dispatchHighWater.Advance(triggerAt);
+                            AdvanceHighWater();
                             return curr with
                             {
                                 Content = def with
@@ -3324,7 +3438,7 @@ internal static class NodeTypeCompilationHelpers
                         // COMMIT: this is the one path that stamps
                         // LastReleaseRequestHandledAt — advance the in-memory
                         // high-water in the same breath so the two marks never diverge.
-                        dispatchHighWater.Advance(triggerAt);
+                        AdvanceHighWater();
                         // Stamp WHAT this dispatch is for, on the same commit that flips to
                         // Pending, so a later trigger for the same inputs can be recognised as
                         // already satisfied instead of queued behind it. Since #3390 that is the
