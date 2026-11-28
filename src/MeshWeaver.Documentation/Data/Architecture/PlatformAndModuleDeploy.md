@@ -554,7 +554,7 @@ the control instance):
 | core scripts | `check-image-set.sh`, `arm-promoted-set.py` (`armed_commit`), `resolve-platform.py` (portal identity), `release.yml`, `lock-pinned-digests.py` (protects `<core7>-p*` as part of a commit's closure; kept for legacy manifests) |
 | MeshWeaver.Plugins | 0 code readers. `portal-image-rebuild.yml` and `portal-image-relevance.py` mention it in comments; `promotion-candidate.yml`, `core-candidate.yml` and `core-release-attribution.py` use the record's verdict KEY `pair-<core7>-p<plugins7>`, which is a record field, not a registry tag |
 | Memex | 1 code reader: `scripts/image-contains.py`. Comments and historical notes in `helm-release.yml`, two `values.*.public.yaml` files and `mesh/Deployments/memex.json` |
-| Education, Reinsurance, SocialMedia, Manufacturing, Crm | 0 |
+| Education, Reinsurance, SocialMedia, Manufacturing | 0 |
 | live `Deployments/*` on the control instance (5 `Hosting/Deployment` records) | 0 pins; 1 prose mention in `Deployments/memex` |
 
 No Hosting/Deployment record pins an image tag of either shape, and none may.

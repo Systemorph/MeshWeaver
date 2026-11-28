@@ -8,7 +8,7 @@ Order: -20260830
 
 # A platform release wakes the fleet once — and only after Plugins is published
 
-When the platform publishes an image, every node repository — Crm, Reinsurance, SocialMedia,
+When the platform publishes an image, every node repository — Reinsurance, SocialMedia,
 Education, Manufacturing — is meant to rebuild against it automatically, and Plugins is meant to be
 built *with* the platform so those rebuilds find its publication already sealed. The first release
 that tried to do this on its own did three things wrong at once, and the delivery verdict correctly

@@ -243,7 +243,7 @@ All 127 open issues across the five repositories were classified in one pass.
 |---|---|---|---|---|---|
 | MeshWeaver | 63 | **0** | 18 | 32 | 13 |
 | MeshWeaver.Plugins | 21 | **0** | 11 | 8 | 2 |
-| Crm · Reinsurance · Education | 2 | **0** | 0 | 2 | 0 |
+| Reinsurance · Education | 2 | **0** | 0 | 2 | 0 |
 
 **Read the zero carefully.** The classifiers were instructed never to guess `B`, so it means
 *nothing was proven blocking* — not *nothing blocks*. On the day the taxonomy was introduced the

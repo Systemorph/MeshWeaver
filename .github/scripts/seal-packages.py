@@ -231,7 +231,7 @@ def _lines(path: Path) -> list[str]:
 #
 # Measured: the `plugins` publication for c003e001 sealed `Hosting` CARRIED (its lock waited) beside
 # `Store` FRESH, while `Hosting/InstanceAction`, `Hosting/ApprovalInbox` and `Hosting/InstanceRequest`
-# compile `shared=@Store/Core/Source` & co. Every Reinsurance, Manufacturing and Crm gate that
+# compile `shared=@Store/Core/Source` & co. Every Reinsurance and Manufacturing gate that
 # installed it from 2026-10-17 ~10:47Z on went red on exactly those three types.
 #
 # So both halves hold a pair (D compiles sources of P) to ONE rule: the files D read from P are the

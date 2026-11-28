@@ -222,7 +222,7 @@ file in all 34 org repositories, deliberately not the shipped extractor):
 |---|---|
 | repositories in the org | 34 |
 | …with a `.github/workflows` directory | 16 |
-| …declaring ≥ 1 digest pin | 6 (Crm, Education, Manufacturing, Plugins, Reinsurance, SocialMedia) |
+| …declaring ≥ 1 digest pin | 5 (Education, Manufacturing, Plugins, Reinsurance, SocialMedia) |
 | `sha256:`-shaped tokens found | 31 |
 | …inside COMMENTS (prose about past incidents) | 11 |
 | **pin declaration SITES** | **20** — exactly what the lock job reports |
@@ -235,8 +235,8 @@ file in all 34 org repositories, deliberately not the shipped extractor):
 Two things that only a hand count shows. **Eleven of thirty-one `sha256:` tokens are comments** —
 several of them narrating *this* incident inside the very files it broke — so any "count the digests"
 instrument that does not exclude them over-reports by more than a third. And **20 sites collapse to
-15 declarations** in the shipped report, because it dedupes on `(declaration name, digest)` and both
-Plugins and Crm write the same `platform-image-digest:` value at two lane calls; 9 distinct
+15 declarations** in the shipped report, because it dedupes on `(declaration name, digest)` and 
+Plugins writes the same `platform-image-digest:` value at two lane calls; 9 distinct
 manifests is the number retention actually has to keep alive, and it is the one the two counts agree
 on.
 
@@ -266,8 +266,8 @@ here in some form:
 
   🚨 **That claim was true of one shape and not the other until 2026-09-06** (#3454). The
   `$GITHUB_OUTPUT` pattern required a well-formed digest to match at all, so
-  `image-digest=sha256:PLACEHOLDER` matched *nothing* and read as an absence — exempting SocialMedia
-  and Crm, the two repositories that write their tester pin that way, from the guard while this page
+  `image-digest=sha256:PLACEHOLDER` matched *nothing* and read as an absence — exempting SocialMedia,
+  a repository that writes its tester pin that way, from the guard while this page
   said none were exempt. Both shapes now classify through one predicate and the self-test asserts
   both. The way it was found is the transferable part: falsifying a *different* gate against the
   **real** `ci.yml` of the three repositories, rather than against a fixture — see
@@ -280,7 +280,7 @@ here in some form:
   | Shape | Written as | Who writes it this way |
   |---|---|---|
   | a workflow `env:` assignment | `MW_TEST_DIGEST: sha256:…` | Education (`MW_PORTAL_DIGEST` / `MW_MIGRATION_DIGEST` / `MW_TEST_DIGEST`), Plugins and Reinsurance (`MW_IMAGE_DIGEST` / `MW_PORTAL_IMAGE_DIGEST`), Manufacturing |
-  | a `$GITHUB_OUTPUT` step output | `echo "image-digest=sha256:…"` | SocialMedia, Crm — invisible to any scan of `env:` blocks |
+  | a `$GITHUB_OUTPUT` step output | `echo "image-digest=sha256:…"` | SocialMedia — invisible to any scan of `env:` blocks |
   | an inline image reference | `…azurecr.io/mw-plugin-test@sha256:…` | anywhere a job names the image directly |
 
 - **Know where the extractor stops, and treat a fourth shape as a defect.** Those three are what the

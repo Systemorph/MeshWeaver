@@ -679,10 +679,10 @@ manifest, then push the module. Two commits on a brand-new `main` is the cost; b
 goes on AFTER the first real run has produced the three contexts to require.
 
 🚨 **`Store/Provision.subdirectory` is the PARENT folder, not the package folder.** `SystemInstall.
-EffectiveSubdirectory` appends the package id, so a request with `"subdirectory": "Crm"` for package
-`Crm` syncs `Crm/Crm` and the import refuses an empty snapshot ("No files found under subdirectory
-'Crm/Crm'"). For a repo whose package folder sits at the root, **omit `subdirectory`** (it derives
-`Crm`). Measured on the control instance, 2026-08-28; a retry is `patch` `subdirectory: null` +
+EffectiveSubdirectory` appends the package id, so a request with `"subdirectory": "Pkg"` for package
+`Pkg` syncs `Pkg/Pkg` and the import refuses an empty snapshot ("No files found under subdirectory
+'Pkg/Pkg'"). For a repo whose package folder sits at the root, **omit `subdirectory`** (it derives
+`Pkg`). Measured on the control instance, 2026-08-28; a retry is `patch` `subdirectory: null` +
 `requestedAction: "Provision"` — the phases reconcile the `_GitSync` they wrote.
 
 ## 11. Make the content reachable — register the repo as a catalog source
@@ -713,8 +713,8 @@ build, and a Dependabot PR would fight the reconciler. See [`/new-deployment`](.
 **Measured 2026-09-07 (MeshWeaver#3582, #3583).** A content repository was created on 08-28 with
 everything above and **no webhooks**. Nothing checked. Its partition on the control instance last
 synced on 08-30; ten days later the repo was 54 commits ahead, the portal still held files the repo
-had retired, every prebuilt Crm bundle was refused by the source-fingerprint gate (#2813), and
-opening any Crm page compiled ten-day-old sources on first use — reported as *"why is bake not
+had retired, every prebuilt bundle of its package was refused by the source-fingerprint gate (#2813), and
+opening any of its pages compiled ten-day-old sources on first use — reported as *"why is bake not
 working"*. Every other node repo had two hooks; nobody had noticed the one that had none.
 
 A portal learns about a repo through exactly one channel: a GitHub webhook on the REPO, pointed at
@@ -756,7 +756,7 @@ PY
 
 **Prove it, do not assume it:** the ping delivery must read `status=OK code=200` from the portal.
 A hook that exists and delivers non-2xx is the same as no hook — a wrong secret answers 401 and
-the repo is exactly as invisible as Crm was. Then, after the first green `main` run, read the
+the repo is exactly as invisible as that one was. Then, after the first green `main` run, read the
 partition's `_GitSync.lastSyncCommitSha` on each portal: it must equal that run's `head_sha`.
 
 **The denominator is "every live portal", and it moves.** A new portal (a client deployment, a
@@ -768,7 +768,7 @@ gh api "orgs/Systemorph/repos?per_page=100" --jq '.[] | select(.archived==false)
   | while read -r r; do printf '%-28s %s\n' "$r" "$(gh api "repos/Systemorph/$r/hooks" \
       --jq '[.[] | "\(.config.url | sub("https://";"") | sub("/webhooks/github";""))"] | join(" ")')"; done
 # every node repo (one a portal's GitHubSyncConfig names — `search partitions:all nodeType:GitHubSyncConfig
-# repositoryUrl:*<Name>*` on each portal) must list BOTH hosts. 2026-09-07: Crm listed none.
+# repositoryUrl:*<Name>*` on each portal) must list BOTH hosts. 2026-09-07: one listed none.
 ```
 
 **And the portal side is not implied by the hook.** The webhook only wakes a sync source that
