@@ -8,8 +8,7 @@ namespace MeshWeaver.Deployment.Contract.Test;
 /// One AI tier vocabulary (Systemorph/MeshWeaver.Plugins#4862): the record's <c>ai.tiers</c> takes the
 /// instance's tier-NODE names (<c>chat</c>, <c>coding</c>, <c>reasoning</c>, <c>utility</c>,
 /// <c>review</c>) and renders each as <c>AI__Tiers__{tier id}</c>. The old rank names
-/// (<c>heavy</c>/<c>standard</c>/<c>light</c>) stay ALIASES for one release, so every record written
-/// before keeps its mapping, and the deprecated <c>ModelTier__*</c> keys are no longer rendered (Plugins#4882).
+/// (<c>heavy</c>/<c>standard</c>/<c>light</c>) and the <c>ModelTier__*</c> keys are retired (#4882).
 /// </summary>
 public class TierVocabularyRecordTest
 {
@@ -21,7 +20,7 @@ public class TierVocabularyRecordTest
         }
         """;
 
-    private const string LegacyNames = """
+    private const string RetiredNames = """
         {
           "$type": "DeploymentContent",
           "host": "portal.example.com",
@@ -44,64 +43,43 @@ public class TierVocabularyRecordTest
         // The deprecated rank keys are no longer rendered (Plugins#4882): the tier keys are the only seed.
         Assert.DoesNotContain(c.Keys, k => k.StartsWith("ModelTier__", StringComparison.Ordinal));
 
-        Assert.Empty(record.Ai!.Tiers!.LegacyAliasesInUse());
     }
 
     [Fact]
-    public void ALegacyRecordKeepsItsMappingThroughTheAliases()
+    public void ARecordStillNamingTheRetiredRankNamesIsReadWithThemIgnored()
     {
-        var record = DeploymentRecordJson.Read(LegacyNames)!;
+        // A stored record that still says heavy/standard/light must not fail to read; the names map to nothing.
+        var record = DeploymentRecordJson.Read(RetiredNames)!;
         var tiers = record.Ai!.Tiers!;
 
-        Assert.Equal("m/heavy", tiers.Model("coding"));
-        Assert.Equal("m/standard", tiers.Model("reasoning"));
-        Assert.Equal("m/light", tiers.Model("chat"));
-        Assert.Equal("m/heavy", tiers.Model("heavy"));
-        Assert.Null(tiers.Model("review"));
-        Assert.Equal(["heavy", "standard", "light"], tiers.LegacyAliasesInUse());
+        Assert.Null(tiers.Model("coding"));
+        Assert.Null(tiers.Model("heavy"));
+        Assert.Equal("m/util", tiers.Model("utility"));
+        Assert.Equal([new KeyValuePair<string, string>("utility", "m/util")], tiers.Declared());
 
         var c = DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Aspire("http://localhost:8080"));
-        Assert.Equal("m/heavy", c["AI__Tiers__coding"]);
-        Assert.Equal("m/standard", c["AI__Tiers__reasoning"]);
-        Assert.Equal("m/light", c["AI__Tiers__chat"]);
+        Assert.Equal("m/util", c["AI__Tiers__utility"]);
+        Assert.False(c.ContainsKey("AI__Tiers__coding"), "a retired rank name renders no tier key");
         Assert.DoesNotContain(c.Keys, k => k.StartsWith("ModelTier__", StringComparison.Ordinal));
-        Assert.False(c.ContainsKey("AI__Tiers__review"), "a tier the record does not name renders nothing");
-        Assert.False(c.ContainsKey("AI__Tiers__heavy"), "an alias is never rendered as a tier of its own");
-
-        // The record at rest is not rewritten by reading it: the alias round-trips as written.
-        var written = JsonNode.Parse(DeploymentRecordJson.Write(record))!["ai"]!["tiers"]!.AsObject();
-        Assert.Equal("m/heavy", (string?)written["heavy"]);
-        Assert.Null(written["coding"]);
     }
 
     [Fact]
-    public void TheTierNodeNameWinsOverItsAliasAndBlankIsUnset()
+    public void ATierNameIsTrimmedAndBlankIsUnset()
     {
-        var tiers = new ModelTiers { Coding = " m/coding ", Heavy = "m/heavy", Chat = " ", Light = "m/light" };
+        var tiers = new ModelTiers { Coding = " m/coding ", Chat = " " };
 
         Assert.Equal("m/coding", tiers.Model("CODING"));
-        Assert.Equal("m/light", tiers.Model("chat"));
+        Assert.Null(tiers.Model("chat"));
         Assert.Null(tiers.Model("vision"));
-        Assert.Equal(
-            [new KeyValuePair<string, string>("chat", "m/light"), new KeyValuePair<string, string>("coding", "m/coding")],
-            tiers.Declared());
-
-        // A STORED blank alias is still a legacy name the removal sweep must see, and renders no key at all.
-        var blankAlias = new ModelTiers { Chat = "m/chat", Light = "" };
-        Assert.Equal(["light"], blankAlias.LegacyAliasesInUse());
-        Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(
-            new DeploymentContent { Ai = new AiProviders { Tiers = blankAlias with { Chat = null } } }, PortalConfigOptions.Helm).Keys,
-            k => k.StartsWith("ModelTier__", StringComparison.Ordinal));
+        Assert.Equal([new KeyValuePair<string, string>("coding", "m/coding")], tiers.Declared());
     }
 
     [Fact]
-    public void TheLegacyFluentNamesWriteTheTierNodeFields()
+    public void TheFluentTierModelsWriteTheTierNodeFields()
     {
-        var built = new DeploymentContent().WithAi(a => a.Tiers(heavy: "h", standard: "s", light: "l", utility: "u").TierModels(review: "r"));
+        var built = new DeploymentContent().WithAi(a => a.TierModels(chat: "l", reasoning: "s", coding: "h", utility: "u", review: "r"));
         var tiers = built.Ai!.Tiers!;
 
         Assert.Equal(("h", "s", "l", "u", "r"), (tiers.Coding, tiers.Reasoning, tiers.Chat, tiers.Utility, tiers.Review));
-        Assert.Null(tiers.Heavy);
-        Assert.Empty(tiers.LegacyAliasesInUse());
     }
 }

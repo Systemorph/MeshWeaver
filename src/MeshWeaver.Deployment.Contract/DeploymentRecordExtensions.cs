@@ -810,15 +810,6 @@ public static class DeploymentRecordExtensions
         };
     }
 
-    /// <summary>
-    /// 🕰️ LEGACY rank names, for one release: <paramref name="heavy"/> is <c>coding</c>,
-    /// <paramref name="standard"/> is <c>reasoning</c>, <paramref name="light"/> is <c>chat</c>. Writes the
-    /// tier-node fields, so a record built this way already speaks the one vocabulary. Use
-    /// <see cref="TierModels"/>.
-    /// </summary>
-    public static AiProviders Tiers(this AiProviders a, string? heavy = null, string? standard = null, string? light = null, string? utility = null) =>
-        a.TierModels(chat: light, reasoning: standard, coding: heavy, utility: utility);
-
     private static ModelProvider Provider(ModelProvider? current, IEnumerable<string> models, string? endpoint, int? order, bool? enabled)
     {
         var p = current ?? new ModelProvider();

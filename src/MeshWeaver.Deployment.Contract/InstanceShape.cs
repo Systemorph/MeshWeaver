@@ -830,11 +830,9 @@ public sealed record ModelProvider
 /// tier renders as <c>AI__Tiers__{tier id}</c>, which the instance reads as the record's seed for the
 /// tier node of that id.
 ///
-/// <para><b>The old rank names are ALIASES for one release.</b> <see cref="Heavy"/> is
-/// <see cref="Coding"/>, <see cref="Standard"/> is <see cref="Reasoning"/> and <see cref="Light"/> is
-/// <see cref="Chat"/>: a record that still carries them keeps its mapping, and the tier's own name wins
-/// where both are set. Read a tier through <see cref="Model"/> or <see cref="Declared"/>, never through
-/// an alias property, so the alias fold lives in one place.</para>
+/// <para>The old rank names <c>heavy</c>, <c>standard</c> and <c>light</c> are retired (Plugins#4882): a
+/// stored record that still carries one has it ignored on read. Read a tier through <see cref="Model"/> or
+/// <see cref="Declared"/>.</para>
 /// </summary>
 public sealed record ModelTiers
 {
@@ -861,11 +859,11 @@ public sealed record ModelTiers
     [Description("Utility tier model")]
     public string? Utility { get; init; }
 
-    /// <summary>The chat tier (the everyday round). Was <see cref="Light"/>.</summary>
+    /// <summary>The chat tier (the everyday round).</summary>
     [Description("Chat tier model")]
     public string? Chat { get; init; }
 
-    /// <summary>The reasoning tier. Was <see cref="Standard"/>.</summary>
+    /// <summary>The reasoning tier.</summary>
     [Description("Reasoning tier model")]
     public string? Reasoning { get; init; }
 
@@ -873,58 +871,34 @@ public sealed record ModelTiers
     [Description("Review tier model")]
     public string? Review { get; init; }
 
-    /// <summary>The coding tier (the strongest model). Was <see cref="Heavy"/>.</summary>
+    /// <summary>The coding tier (the strongest model).</summary>
     [Description("Coding tier model")]
     public string? Coding { get; init; }
 
-    /// <summary>LEGACY alias of <see cref="Coding"/>, kept for one release so a record that still says <c>heavy</c> keeps its mapping.</summary>
-    [Description("Legacy alias of the coding tier (heavy)")]
-    public string? Heavy { get; init; }
-
-    /// <summary>LEGACY alias of <see cref="Reasoning"/>, kept for one release.</summary>
-    [Description("Legacy alias of the reasoning tier (standard)")]
-    public string? Standard { get; init; }
-
-    /// <summary>LEGACY alias of <see cref="Chat"/>, kept for one release.</summary>
-    [Description("Legacy alias of the chat tier (light)")]
-    public string? Light { get; init; }
-
     /// <summary>
-    /// The model this record names for <paramref name="tierId"/> — the tier's own field, else its
-    /// legacy alias; trimmed, and null when blank or when the id is not one of <see cref="TierIds"/>
-    /// (or a legacy rank name). Case-insensitive, like a tier node's id. Pure.
+    /// The model this record names for <paramref name="tierId"/> — trimmed, and null when blank or when
+    /// the id is not one of <see cref="TierIds"/>. Case-insensitive, like a tier node's id. Pure.
     /// </summary>
-    /// <param name="tierId">A tier id (<c>coding</c>); a legacy rank name (<c>heavy</c>) is accepted too.</param>
+    /// <param name="tierId">A tier id (<c>coding</c>).</param>
     /// <returns>The model id or node path, or null.</returns>
     public string? Model(string? tierId) =>
         Trimmed((tierId ?? "").Trim().ToLowerInvariant() switch
         {
             UtilityTier => Utility,
-            ChatTier or "light" => Blank(Chat) ? Light : Chat,
-            ReasoningTier or "standard" => Blank(Reasoning) ? Standard : Reasoning,
+            ChatTier => Chat,
+            ReasoningTier => Reasoning,
             ReviewTier => Review,
-            CodingTier or "heavy" => Blank(Coding) ? Heavy : Coding,
+            CodingTier => Coding,
             _ => null,
         });
 
-    /// <summary>Every tier this record names a model for, in <see cref="TierIds"/> order, aliases folded in. Pure.</summary>
+    /// <summary>Every tier this record names a model for, in <see cref="TierIds"/> order. Pure.</summary>
     /// <returns>(tier id, model) pairs; empty when no tier is named.</returns>
     public ImmutableList<KeyValuePair<string, string>> Declared() =>
         TierIds.Select(id => new KeyValuePair<string, string?>(id, Model(id)))
             .Where(t => t.Value is not null)
             .Select(t => new KeyValuePair<string, string>(t.Key, t.Value!))
             .ToImmutableList();
-
-    /// <summary>
-    /// The legacy rank names this record still carries — what the alias removal has to sweep first. Pure.
-    /// Counts every STORED alias, a blank one included: the record keeps it at rest, so it is still
-    /// a dependency to sweep. (Resolution,
-    /// in <see cref="Model"/>, treats a blank as unset — a different question.)
-    /// </summary>
-    /// <returns>The camelCase field names (<c>heavy</c>, <c>standard</c>, <c>light</c>) that are present.</returns>
-    public ImmutableList<string> LegacyAliasesInUse() =>
-        new[] { new KeyValuePair<string, string?>("heavy", Heavy), new("standard", Standard), new("light", Light) }
-            .Where(a => a.Value is not null).Select(a => a.Key).ToImmutableList();
 
     private static bool Blank(string? value) => string.IsNullOrWhiteSpace(value);
 

@@ -41,8 +41,7 @@ public static class DeploymentPortalConfig
     /// <summary>
     /// The prefix of the record's per-tier seed: <c>AI__Tiers__{tier id}</c> (<c>AI:Tiers:coding</c> to the
     /// portal), one key per tier the record's <c>ai.tiers</c> names, keyed by the instance's tier NODE id
-    /// (<see cref="ModelTiers.TierIds"/>). Replaces the deprecated <c>ModelTier__Heavy/Standard/Light/Utility</c>
-    /// rank keys, which are no longer rendered (Plugins#4882).
+    /// (<see cref="ModelTiers.TierIds"/>). Replaces the retired <c>ModelTier__*</c> rank keys (Plugins#4882).
     /// </summary>
     public const string TierKeyPrefix = "AI__Tiers__";
 
