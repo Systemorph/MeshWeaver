@@ -1142,7 +1142,7 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
         m.unlink()
     ext = work / "ext-modules-composed"
     (ext / "MeshWeaver.AI").mkdir(parents=True, exist_ok=True)
-    r = h.publish(downstream, "Systemorph/MeshWeaver.Crm", "3001",
+    r = h.publish(downstream, "Systemorph/MeshWeaver.Manufacturing", "3001",
                   {"EXT_MODULES_DIR": str(ext), "SEAL_MODULES_OWN": "0", "EXT_MODULES_UPSTREAM": "1"})
     s = h.shelf()
     index = s.dest / "modules" / "_index"
@@ -1151,7 +1151,7 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
           and "sealing an EMPTY modules/_index by design (MeshWeaver#3732)" in r.stdout,
           f"rc={r.returncode}, sealed={s.sealed()}, index={(index.read_text() if index.is_file() else 'absent')!r}")
     h.reset()
-    r = h.publish(downstream, "Systemorph/MeshWeaver.Crm", "3002",
+    r = h.publish(downstream, "Systemorph/MeshWeaver.Manufacturing", "3002",
                   {"EXT_MODULES_DIR": str(ext), "SEAL_MODULES_OWN": None, "EXT_MODULES_UPSTREAM": None})
     s = h.shelf()
     check("…and the same bake from a workflow that does NOT export the own count is still refused (skew)",

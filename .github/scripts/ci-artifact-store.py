@@ -17,7 +17,6 @@ measured over the live (non-expired) artifact inventory on 2026-09-17, REST only
     MeshWeaver.Reinsurance   10 GB
     MeshWeaver.Education      8 GB
     MeshWeaver.Manufacturing  6 GB
-    MeshWeaver.Crm            6 GB
 
 Of Plugins' 382 GB, 247 GB is `module-bundle-*` at 7-day retention — and most of those bytes are
 DUPLICATES: when the build ledger says a module's key is already built, the pack leg downloads that

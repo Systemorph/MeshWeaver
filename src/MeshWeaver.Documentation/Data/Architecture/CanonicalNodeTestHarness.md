@@ -27,7 +27,7 @@ and a harness that compiles something the gate does not is an instrument that re
 do not exist and hides the ones that do.
 
 `compile-check.py` is a canonical, fetched at a moving ref. The harness was not: it existed as three
-vendored copies, in MeshWeaver.Crm, MeshWeaver.Reinsurance and MeshWeaver.Plugins, with nothing in
+vendored copies, in MeshWeaver.Reinsurance, MeshWeaver.Plugins and the CRM's repository, with nothing in
 core to compare them against and no guard over any of them.
 
 On 2026-09-18, core `ce104c872e` — *"compile-check builds ONE unit, as the mesh does"* — replaced the
@@ -45,7 +45,7 @@ lane runs `compile-check.py` directly, so nothing anywhere invoked the caller:
 - **MeshWeaver.Reinsurance** — `AttributeError: module 'compile_check' has no attribute
   'usings_union'`, raised before a single test ran. Its `--self-test` printed `✓ self-test green` in
   the same checkout, because it only ever exercised the collision detector.
-- **MeshWeaver.Crm** — patched with a locally re-derived global-usings union behind a
+- **the CRM's repository** — patched with a locally re-derived global-usings union behind a
   `hasattr(cc, …)` guard, so it kept *running*, green, against a compile model the gate had
   abandoned.
 - **MeshWeaver.Plugins** — alive only because it loads a vendored `compile-check.py` **fork** that
@@ -151,7 +151,7 @@ previously refused, runs **44 tests, 44 passed**.
 `MW_PLATFORM_SCRIPTS` (a core checkout's `.github/scripts`) always wins — that is the offline route
 and the way to pin the harness to an exact vintage. Otherwise:
 
-- **MeshWeaver.Crm, MeshWeaver.Reinsurance** — `scripts/platform-script.py`, the loader those
+- **MeshWeaver.Reinsurance** (and the CRM's repository) — `scripts/platform-script.py`, the loader those
   repositories already use for `compile-check.py`. In Crm, `LANE_FOR` maps `run-node-tests.py` to
   `node-repo-compile-check.yml` — **the same lane as `compile-check.py`, deliberately**, so one ref
   governs both and the harness cannot be a different vintage from the unit shaping it compiles.
@@ -177,7 +177,7 @@ duplicates: `run-node-tests.py UWDeepfield` used to fail with ~150 `CS0101`/`CS0
 single test ran, so **46 NodeTypes' suites had never executed once** — invisibly, because
 `compile-check.py` compiles per type and stayed green throughout.
 
-Adopting it changed what MeshWeaver.Crm reports, and the change is arithmetic rather than coverage:
+Adopting it changed what the CRM's suite reports, and the change is arithmetic rather than coverage:
 the same **13 suites and 153 distinct case names** as before, executed **481 times over 7 distinct
 source sets** instead of 163 times over one merged program no NodeType is. A suite shared by several
 types runs once per set, which is what the mesh does to it.

@@ -129,7 +129,7 @@ name: Node repo publish-bake (reusable)
 # Maintainer rule, 2026-09-12, verbatim: "for compile always find latest package of platform and
 # plugins." Every satellite resolves the newest PLATFORM-SEALED core set at run time
 # (MeshWeaver#3842) and re-resolves it in the first step of every NORMAL job, so a "re-run failed
-# jobs" tests the newest packages (Education#320 / #323, Reinsurance#202, Crm#94, Manufacturing#82,
+# jobs" tests the newest packages (Education#320 / #323, Reinsurance#202, Manufacturing#82,
 # SocialMedia#181, Plugins#1739). What a satellite CANNOT refresh is THIS lane: a `uses:` job takes
 # `image-digest` / `platform-image-digest` as `with:` inputs evaluated when it is CALLED, from the
 # caller's stored `platform-ref` outputs, and GitHub offers no hook inside a reusable workflow for
@@ -1430,7 +1430,7 @@ jobs:
             echo "\`meshweaver-upstream-published\` to every repository that declares that source."
             echo "That wake carries both images of the upstream's wave, so the rebuild lands on the"
             echo "identity its dependency is actually sealed for. Measured 2026-09-08 on"
-            echo "MeshWeaver.Crm: a \`meshweaver-framework-released\` run failed here at 15:36Z and"
+            echo "a satellite: a \`meshweaver-framework-released\` run failed here at 15:36Z and"
             echo "the \`meshweaver-upstream-published\` wake for the same set succeeded at 16:01Z."
             echo ""
             echo "🚨 **The \`schedule\` poll does NOT retry this identity.** It resolves the platform"
@@ -2267,8 +2267,8 @@ jobs:
       # workflow-side install would leave a satellite whose ref is newer than its pin running a
       # script whose dependency nobody installed). An UNCONDITIONAL `actions/setup-python` stood
       # here from 2026-09-17 because the self-hosted ARC image shipped python3 WITHOUT ensurepip,
-      # which took every satellite's publish down (MeshWeaver.Crm run 35199593887,
-      # MeshWeaver.Manufacturing run 35205340142). The image bakes `python3-venv` now
+      # which took every satellite's publish down (MeshWeaver.Manufacturing run 35205340142
+      # among them). The image bakes `python3-venv` now
       # (Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile, meshweaver-ci-runner
       # 20260917-3c61f83) and the `ubuntu-latest` fallback above always had it (runner-images'
       # install-python.sh), so on both runners this job can land on today the step is dead weight.
@@ -2326,7 +2326,7 @@ jobs:
           probe="${RUNNER_TEMP}/publish-bake-venv-probe-healed"
           rm -rf "$probe"
           if ! python3 -m venv "$probe" || [ ! -x "$probe/bin/pip" ]; then
-            echo "::error::No interpreter on this runner can build a venv, so publish-bake-bundles.sh cannot install its pinned Azure SDKs and NOTHING would be published — the 2026-09-17 fleet-wide outage (MeshWeaver.Crm run 35199593887, MeshWeaver.Manufacturing run 35205340142). Failing before anything is written, so the existing publication stays sealed. Fix the runner image selected by MW_RUNNER_DOCKER (it must carry python3-venv), or pin this lane to a runner that does."
+            echo "::error::No interpreter on this runner can build a venv, so publish-bake-bundles.sh cannot install its pinned Azure SDKs and NOTHING would be published — the 2026-09-17 fleet-wide outage (MeshWeaver.Manufacturing run 35205340142 among them). Failing before anything is written, so the existing publication stays sealed. Fix the runner image selected by MW_RUNNER_DOCKER (it must carry python3-venv), or pin this lane to a runner that does."
             exit 1
           fi
           rm -rf "$probe"

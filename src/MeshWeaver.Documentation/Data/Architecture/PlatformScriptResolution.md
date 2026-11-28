@@ -109,7 +109,6 @@ Measured across the fleet on 2026-09-08, one file forked three ways, none of the
 
 | repo | vendored `scripts/compile-check.py` | `scripts/platform-script.py` |
 |---|---|---|
-| MeshWeaver.Crm | 40,610 B | absent |
 | MeshWeaver.SocialMedia | 39,515 B | absent |
 | MeshWeaver.Manufacturing | removed | present (per-script resolution) |
 | MeshWeaver.Reinsurance | removed | present (single-sha resolution) |

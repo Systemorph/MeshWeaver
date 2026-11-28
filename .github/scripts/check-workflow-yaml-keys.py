@@ -13,7 +13,7 @@ passes, the job runs — and it uses a value the diff never shows.
 Adopting #3560's `centralized-gen-manifests` input needed a `with:` block on each satellite's
 `validate:` job. The patcher found the job's end with `s.index("\\n  ", i)`, which also matches
 `"\\n    with:"` — so it cut the block after `uses:` and appended a SECOND `with:`. In
-MeshWeaver.Education and MeshWeaver.Crm the file came out as:
+MeshWeaver.Education and one more satellite the file came out as:
 
     validate:
       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-validate.yml@<NEW>
@@ -35,7 +35,7 @@ sha and a `platform-ref` that disagree — and reds on it. It is strictly narrow
   * it only sees a duplicate whose effect is a PIN mismatch (a duplicated `if:`, `env:`, `needs:`
     or `timeout-minutes:` is invisible to it, and to everything else);
   * it only runs where `Platform pins name one build` is a required context (measured 2026-09-07:
-    MeshWeaver.SocialMedia and MeshWeaver.Crm yes; MeshWeaver.Reinsurance and .Education no);
+    MeshWeaver.SocialMedia yes; MeshWeaver.Reinsurance and .Education no);
   * it reports after a full CI run, not at the first job.
 
 This gate is the general form: any duplicate key, any mapping, any workflow, at the first job, with

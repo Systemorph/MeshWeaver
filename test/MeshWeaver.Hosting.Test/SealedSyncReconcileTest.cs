@@ -20,17 +20,17 @@ namespace MeshWeaver.Hosting.Test;
 /// </summary>
 public class SealedSyncReconcileTest
 {
-    private static readonly RepoIdentity Crm = new("Systemorph", "MeshWeaver.Crm");
+    private static readonly RepoIdentity Crm = new("Systemorph", "MeshWeaver.Plugins");
     private const string Identity = "sb43f9287dbd6922a7937bd24be103937";
     private const string SealedCommit = "76cdb553bd256f6cbc4b27caea5f139505787790";
     private const string OlderCommit = "d9e2768cb0000000000000000000000000000000";
 
     private static SealedSource Sealed(string commit = SealedCommit, bool isSealed = true) =>
-        new("crm", "Systemorph/MeshWeaver.Crm", commit, isSealed, isSealed ? null : "no completion sentinel");
+        new("crm", "Systemorph/MeshWeaver.Plugins", commit, isSealed, isSealed ? null : "no completion sentinel");
 
     private static GitHubSyncConfig At(string? commit) => new()
     {
-        RepositoryUrl = "https://github.com/Systemorph/MeshWeaver.Crm",
+        RepositoryUrl = "https://github.com/Systemorph/MeshWeaver.Plugins",
         Branch = "main",
         LastSyncCommitSha = commit,
     };
@@ -104,7 +104,7 @@ public class SealedSyncReconcileTest
     [Fact]
     public void SealsThatDisagree_StillNeverMoveASourceThatHasACommit()
     {
-        var other = new SealedSource("crm-b", "Systemorph/MeshWeaver.Crm", OlderCommit, true, null);
+        var other = new SealedSource("crm-b", "Systemorph/MeshWeaver.Plugins", OlderCommit, true, null);
         var plan = SealedSyncReconcile.Decide(other, Crm, "Crm", At("ffffffff00000000"), [Sealed(), other], Identity, []);
         plan.Action.Should().Be(SealedSyncReconcile.Action.None);
         plan.SteadyState.Should().BeTrue();

@@ -8,7 +8,7 @@ namespace MeshWeaver.PluginTester.Test;
 /// <summary>
 /// The bake-consumption verdict must NAME what declined.
 ///
-/// <para>🚨 The shape this pins was measured on <c>MeshWeaver.Crm</c>: the gate reported "adopted 86
+/// <para>🚨 The shape this pins was measured on the CRM: the gate reported "adopted 86
 /// of 87 baked assembly(ies) — 1 were DECLINED" and pointed the operator at the per-assembly reason
 /// "logged by PrebuiltAssemblySeeder". That reason is logged at <b>Information</b> and the gate mesh
 /// runs at <b>Warning</b>, so the log it named contained nothing: <c>main</c> sat red from
