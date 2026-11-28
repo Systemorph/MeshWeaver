@@ -4,6 +4,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <!-- AModuleAdoptedAfterBootServesItsStaticAssetsTest drives the live module static-asset lane. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <!-- The shared storage fault injectors (FaultInjectingStorageAdapter + FaultSwitch): a test that
          needs a store fault arms one instead of hand-rolling an IStorageAdapter decorator. A library
@@ -26,6 +28,9 @@
          reasoning as GitSync above: the PluginCatalog suite lives in MeshWeaver.Plugins against a
          PINNED core, so a test of a core change belongs where the code is. -->
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
     <!-- Concrete HostBuilder for MeshHostBuilderTeardownOrderingTest (the legacy
