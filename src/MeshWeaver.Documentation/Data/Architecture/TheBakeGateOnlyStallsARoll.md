@@ -466,6 +466,56 @@ finishes. Two cases are pinned:
 - The negative control: a declined adoption (nothing recorded) must not flip while it is in flight,
   and the type must still be rebuilt for the live framework once the reservation clears.
 
+## A package's own failure is an Error on that type, not a refusal of the roll
+
+([Memex#1155](https://github.com/Systemorph/Memex/issues/1155), maintainer, 2026-11-28: *"we should
+probably allow the update and error the code which does not compile. like this it's difficult to
+even see what's happening"*.)
+
+**What went wrong.** The gate was all-or-nothing. A pod on a new 4.x image refused readiness while 7,
+then 13, then 24 package NodeTypes failed on it (compile errors, an untracked module's missing
+bundle, "not seeded"), so the roll stalled with the previous image serving. A refused pod is also
+refused by the [publication gate](../MeshAdmission), so it wrote none of those outcomes: the mesh
+kept showing the earlier replicas' `Ok`, the only trace was a pod log whose readiness line repeated
+on every probe, and no compiler diagnostic was visible anywhere.
+
+**The declared policy.** `PreWarm:PackageFailuresRefuseReadiness` (default **off**) decides what
+a failing package type does to readiness:
+
+| Failure | Default | With `PackageFailuresRefuseReadiness=true` |
+|---|---|---|
+| A package type fails: compile error, upstream failed, faulted activation, untracked module with no bundle for this framework, "not seeded" | Recorded in `NodeTypeBakeGateState.Errored`. The pod goes Ready and is admitted. | `Regressed` (the old contract): the roll stalls. |
+| Adopt-only boot ("bake at build"): a type no CI-built bundle covers on this image | Named in the gate detail and in `Errored`; the pod goes Ready. The type compiles on first access, and the compile watcher stamps its own Error if it cannot build. No adoption stamp is published for a bundle that was never adopted. | `Faulted` (unproven). |
+| The sweep or adoption could not run at all (the enumeration threw, the store could not be read, the build coordination node was unreachable) | `Faulted`: readiness is still refused. | Same. |
+| The host cannot boot, or a static core type does not load | The process does not come up; this gate never sees it. | Same. |
+
+**What the type record says.** With the pod admitted, the compile's own stamp is no longer withheld:
+the failing type reads `CompilationStatus: Error` and its `CompilationError` carries the compiler
+diagnostics or the named refusal (`Untracked module content: …`). An earlier build that is loadable
+for THIS framework keeps serving (the "old build keeps serving, the record says why" rule); with none,
+the type is unavailable and the error is on the record. An adoption or verified stamp is only ever
+written for a build that was verified: a type that did not build gets the Error stamp and nothing
+else. `/health` names the types in the `nodetype_bake` detail (`N at Error on this image, the roll
+proceeds - …`).
+
+**One line per pod.** When the verdict is in, the pod logs ONE warning with the count and the list of
+types at Error (`DynamicTypePreWarmer: N NodeType(s) are at Error on this pod and the roll PROCEEDS`).
+Nothing repeats: the refusal line that used to print on every readiness probe is gone because the
+probe is now healthy.
+
+**Bake at build still holds.** CI bundles stay the primary path; this changes only what an uncovered
+or failing type costs the platform. Find the failing types with
+`search 'nodeType:NodeType content.compilationStatus:Error partitions:all'` and fix them in their
+package. A type whose bundle is missing needs the package rebuilt for this framework identity.
+
+The class default of `NodeTypeBakeGateState.PackageFailuresRefuseReadiness` stays strict, so a unit
+test that builds the state directly keeps pinning the old rule; the host registration
+(`AddNodeTypeBakeGate`) declares the policy from configuration. Pinned by
+`APackageFailureIsAnErrorNotARefusalTest` (a real untracked-module type: the pod is Ready, admitted,
+and the shared record reads `Error` with the named refusal; a sweep that could not run still refuses;
+a held Error stamp is released on admission and withheld under the strict option) and, for the strict
+option, `ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest`.
+
 ## What this does not cover
 
 - **A `Faulted` sweep on an image that has NOT served here still refuses readiness** unless
