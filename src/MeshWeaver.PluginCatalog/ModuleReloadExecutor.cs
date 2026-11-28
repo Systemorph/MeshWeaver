@@ -84,7 +84,7 @@ public static class ModuleReloadExecutor
             .Concat()
             .Subscribe(
                 _ => { },
-                ex => LogStopped(logger, ex, hub.Address)));
+                ex => LogStopped(logger, ex, hub.Address, hub.IsShuttingDown)));
         return Observable.Return(Unit.Default);
     }
 
@@ -96,9 +96,9 @@ public static class ModuleReloadExecutor
     /// status and the next activation resumes it — so it is Information; anything else is a real
     /// fault and stays an Error, naming the real exception.
     /// </summary>
-    internal static void LogStopped(ILogger? logger, Exception ex, Address address) =>
+    internal static void LogStopped(ILogger? logger, Exception ex, Address address, bool hubShuttingDown = false) =>
         ExecutorStopLog.Report(logger, ex, address, "[ModuleReload]",
-            "the request keeps its last status; the next activation of this node resumes it");
+            "the request keeps its last status; the next activation of this node resumes it", hubShuttingDown);
 
     /// <summary>One activation's state: which steps it has already started (an echo of its own
     /// write must not start the same step twice). Instance state of the activation, never static.</summary>

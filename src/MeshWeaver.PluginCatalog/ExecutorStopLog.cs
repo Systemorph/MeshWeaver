@@ -19,12 +19,16 @@ internal static class ExecutorStopLog
     /// <param name="address">The request node's hub address.</param>
     /// <param name="tag">The log prefix, e.g. <c>[Reboot]</c>.</param>
     /// <param name="consequence">What happens to the request, appended after the dash.</param>
-    internal static void Report(ILogger? logger, Exception ex, Address address, string tag, string consequence)
+    /// <param name="hubShuttingDown">Whether the executor's own hub is shutting down. A disposed
+    /// CONTAINER names no hub, so it is only read as this hub's teardown when the hub is in fact
+    /// shutting down; otherwise it may be another hub's and stays an Error.</param>
+    internal static void Report(ILogger? logger, Exception ex, Address address, string tag, string consequence,
+        bool hubShuttingDown = false)
     {
         var cause = ex;
         while (cause is System.Reflection.TargetInvocationException { InnerException: { } inner })
             cause = inner;
-        if (FaultClassifier.IsHubDisposalOf(cause, address) || FaultClassifier.IsDisposedContainer(cause))
+        if (FaultClassifier.IsHubDisposalOf(cause, address) || (hubShuttingDown && FaultClassifier.IsDisposedContainer(cause)))
             logger?.LogInformation(
                 "{Tag} the executor on {Path} stopped because its hub is shutting down — {Consequence}",
                 tag, address, consequence);

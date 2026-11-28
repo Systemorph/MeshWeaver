@@ -74,13 +74,13 @@ public static class PackageUninstallExecutor
             .Select(run.Step)
             .Concat()
             .Subscribe(_ => { },
-                ex => LogStopped(logger, ex, hub.Address)));
+                ex => LogStopped(logger, ex, hub.Address, hub.IsShuttingDown)));
         return Observable.Return(Unit.Default);
     }
 
     /// <summary>Reports why the executor's step chain ended (<see cref="ExecutorStopLog"/>).</summary>
-    internal static void LogStopped(ILogger? logger, Exception ex, Address address) =>
-        ExecutorStopLog.Report(logger, ex, address, "[PackageUninstall]", "the request keeps its status");
+    internal static void LogStopped(ILogger? logger, Exception ex, Address address, bool hubShuttingDown = false) =>
+        ExecutorStopLog.Report(logger, ex, address, "[PackageUninstall]", "the request keeps its status", hubShuttingDown);
 
     /// <summary>
     /// The packages this instance has UNINSTALLED and not installed again — what no unattended

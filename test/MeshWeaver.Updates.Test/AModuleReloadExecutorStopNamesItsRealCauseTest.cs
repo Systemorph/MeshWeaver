@@ -28,22 +28,22 @@ public class AModuleReloadExecutorStopNamesItsRealCauseTest
     /// <summary>Each control-plane executor reports its stop through the one shared helper.</summary>
     public static IEnumerable<object[]> Executors() =>
     [
-        [(Action<ILogger?, Exception, Address>)ModuleReloadExecutor.LogStopped, "[ModuleReload]"],
-        [(Action<ILogger?, Exception, Address>)PackageUninstallExecutor.LogStopped, "[PackageUninstall]"],
-        [(Action<ILogger?, Exception, Address>)InstanceRebootExecutor.LogStopped, "[Reboot]"],
+        [(Action<ILogger?, Exception, Address, bool>)ModuleReloadExecutor.LogStopped, "[ModuleReload]"],
+        [(Action<ILogger?, Exception, Address, bool>)PackageUninstallExecutor.LogStopped, "[PackageUninstall]"],
+        [(Action<ILogger?, Exception, Address, bool>)InstanceRebootExecutor.LogStopped, "[Reboot]"],
     ];
 
     [Theory]
     [MemberData(nameof(Executors))]
-    public void EveryExecutorUnwrapsAndClassifiesItsStop(Action<ILogger?, Exception, Address> logStopped, string _)
+    public void EveryExecutorUnwrapsAndClassifiesItsStop(Action<ILogger?, Exception, Address, bool> logStopped, string _)
     {
         var disposal = new Recorder();
-        logStopped(disposal, new TargetInvocationException(new HubDisposingException(Hub, "/MeshNode")), Hub);
+        logStopped(disposal, new TargetInvocationException(new HubDisposingException(Hub, "/MeshNode")), Hub, false);
         Assert.Equal(LogLevel.Information, Assert.Single(disposal.Entries).Level);
 
         var fault = new Recorder();
         var real = new InvalidOperationException("boom");
-        logStopped(fault, new TargetInvocationException(real), Hub);
+        logStopped(fault, new TargetInvocationException(real), Hub, false);
         var entry = Assert.Single(fault.Entries);
         Assert.Equal(LogLevel.Error, entry.Level);
         Assert.Same(real, entry.Ex);
@@ -68,6 +68,23 @@ public class AModuleReloadExecutorStopNamesItsRealCauseTest
         var entry = Assert.Single(log.Entries);
         Assert.Equal(LogLevel.Error, entry.Level);
         Assert.Same(real, entry.Ex);
+    }
+
+    private static ObjectDisposedException DisposedContainer() =>
+        new(HubDisposingException.DisposedContainerObjectName);
+
+    [Theory]
+    [MemberData(nameof(Executors))]
+    public void ADisposedContainerIsQuietOnlyWhenTheExecutorsOwnHubIsShuttingDown(
+        Action<ILogger?, Exception, Address, bool> logStopped, string _)
+    {
+        var foreign = new Recorder();
+        logStopped(foreign, DisposedContainer(), Hub, false);
+        Assert.Equal(LogLevel.Error, Assert.Single(foreign.Entries).Level);
+
+        var own = new Recorder();
+        logStopped(own, DisposedContainer(), Hub, true);
+        Assert.Equal(LogLevel.Information, Assert.Single(own.Entries).Level);
     }
 
     [Fact]
