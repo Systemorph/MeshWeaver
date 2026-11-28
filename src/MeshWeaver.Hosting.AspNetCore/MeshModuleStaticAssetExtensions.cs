@@ -168,7 +168,7 @@ public static partial class MeshModuleStaticAssetExtensions
         return app;
     }
 
-    private sealed record LiveSnapshot(ModuleStaticAssetManifest Manifest, RequestDelegate? Pipeline);
+    private sealed record LiveSnapshot(long Stamp, ModuleStaticAssetManifest Manifest, RequestDelegate? Pipeline);
 
     /// <summary>The request-item flag a live branch sets when nothing in it answered.</summary>
     private const string PassThroughKey = "MeshWeaver.ModuleStaticAssets.PassThrough";
@@ -184,16 +184,21 @@ public static partial class MeshModuleStaticAssetExtensions
     {
         var gate = new object();
         LiveSnapshot? built = null;
+        var liveLogger = app.ApplicationServices.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(MeshModuleStaticAssetExtensions));
 
-        RequestDelegate? PipelineFor(ModuleStaticAssetManifest manifest)
+        RequestDelegate? PipelineFor(long stamp, ModuleStaticAssetManifest manifest)
         {
             var seen = Volatile.Read(ref built);
-            if (seen is not null && ReferenceEquals(seen.Manifest, manifest))
+            // A reader that fetched its manifest before an adoption can arrive AFTER the fresher
+            // pipeline was stored: it is answered by the fresher one (never rebuilt, never
+            // overwriting it), so a burst straddling an adoption cannot thrash the single slot.
+            if (seen is not null && (ReferenceEquals(seen.Manifest, manifest) || seen.Stamp > stamp))
                 return seen.Pipeline;
             lock (gate)
             {
                 seen = built;
-                if (seen is not null && ReferenceEquals(seen.Manifest, manifest))
+                if (seen is not null && (ReferenceEquals(seen.Manifest, manifest) || seen.Stamp > stamp))
                     return seen.Pipeline;
                 RequestDelegate? pipeline = null;
                 if (manifest.Mounts.Count > 0)
@@ -207,7 +212,7 @@ public static partial class MeshModuleStaticAssetExtensions
                     });
                     pipeline = branch.Build();
                 }
-                Volatile.Write(ref built, new LiveSnapshot(manifest, pipeline));
+                Volatile.Write(ref built, new LiveSnapshot(stamp, manifest, pipeline));
                 return pipeline;
             }
         }
@@ -219,7 +224,20 @@ public static partial class MeshModuleStaticAssetExtensions
                 await next();
                 return;
             }
-            var pipeline = PipelineFor(source.Current);
+            RequestDelegate? pipeline;
+            try
+            {
+                var (stamp, manifest) = source.CurrentStamped;
+                pipeline = PipelineFor(stamp, manifest);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A rebuild that raced a live swap (a generation unloaded mid-scan) must not turn
+                // a /_content request into a 500: fall through to the host, and the next request
+                // re-resolves once the stamp settles.
+                liveLogger?.LogWarning(ex, "[ModuleStaticAssets] resolving the live manifest failed; falling through to the host");
+                pipeline = null;
+            }
             if (pipeline is null)
             {
                 await next();
@@ -807,24 +825,31 @@ public sealed class ModuleStaticAssetSource
     }
 
     /// <summary>The manifest for the modules loaded now.</summary>
-    public ModuleStaticAssetManifest Current
+    public ModuleStaticAssetManifest Current => CurrentStamped.Manifest;
+
+    /// <summary>
+    /// The manifest for the modules loaded now, with the stamp it was built at. The stamp is
+    /// monotonic (the registry's version only ever increments), so a consumer that caches per
+    /// manifest can tell a stale reader's older answer from a fresher cached one.
+    /// </summary>
+    internal (long Stamp, ModuleStaticAssetManifest Manifest) CurrentStamped
     {
         get
         {
             var now = stamp();
             var seen = Volatile.Read(ref cached);
             if (seen is not null && seen.Stamp == now)
-                return seen.Manifest;
+                return (seen.Stamp, seen.Manifest);
             lock (gate)
             {
                 // Read the stamp BEFORE building: a change landing mid-build leaves the cached
                 // stamp behind, so the next read rebuilds rather than serving a stale answer.
                 now = stamp();
                 if (cached is { } again && again.Stamp == now)
-                    return again.Manifest;
+                    return (again.Stamp, again.Manifest);
                 var manifest = build();
                 Volatile.Write(ref cached, new Snapshot(now, manifest));
-                return manifest;
+                return (now, manifest);
             }
         }
     }

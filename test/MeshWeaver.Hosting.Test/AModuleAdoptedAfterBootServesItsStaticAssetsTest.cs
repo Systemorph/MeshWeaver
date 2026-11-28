@@ -43,6 +43,7 @@ public class AModuleAdoptedAfterBootServesItsStaticAssetsTest : IDisposable
         public long Stamp;
         public readonly List<ModuleStaticAssetMount> Mounts = [];
         public int Builds;
+        public bool FailBuild;
         public RequestDelegate App = null!;
     }
 
@@ -54,6 +55,8 @@ public class AModuleAdoptedAfterBootServesItsStaticAssetsTest : IDisposable
             () =>
             {
                 Interlocked.Increment(ref host.Builds);
+                if (host.FailBuild)
+                    throw new InvalidOperationException("a generation was unloaded mid-scan");
                 return new ModuleStaticAssetManifest(host.Mounts.ToArray(), []);
             });
         var services = new ServiceCollection()
@@ -95,6 +98,22 @@ public class AModuleAdoptedAfterBootServesItsStaticAssetsTest : IDisposable
         Assert.Equal(200, await Get(host, "/_content/Late.Module/view.js"));
         // A path the module does not carry still falls through to the rest of the host.
         Assert.Equal(404, await Get(host, "/_content/Late.Module/missing.js"));
+    }
+
+    [Fact]
+    public async Task AResolveThatFailsMidSwapFallsThroughToTheHostAndRecovers()
+    {
+        var host = Start();
+        host.Mounts.Add(new ModuleStaticAssetMount(
+            "/_content/Swap.Module", LayDownModule("Swap.Module", "view.js")));
+        host.FailBuild = true;
+        Interlocked.Increment(ref host.Stamp);
+
+        // Not a 500: the request falls through to the rest of the host.
+        Assert.Equal(404, await Get(host, "/_content/Swap.Module/view.js"));
+
+        host.FailBuild = false;
+        Assert.Equal(200, await Get(host, "/_content/Swap.Module/view.js"));
     }
 
     [Fact]
