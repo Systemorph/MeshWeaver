@@ -236,3 +236,54 @@ public static class ModuleDelivery
             + ". Check the instance's catalog grant on the registry, or the packages' tier.";
     }
 }
+
+/// <summary>
+/// Says whether a reconcile pass should log the "registry does not offer installed module
+/// packages" line at Warning, or only note it at Debug. The condition is a standing fact (a
+/// catalog grant or tier), re-derived identically on EVERY pass — and a pass runs on every boot,
+/// every module-published delivery and every reconcile — so logging it each time produced
+/// hundreds of identical Warnings a day on one instance (the ledger already carries it durably).
+/// The line is a Warning when the set CHANGED for that registry (first sighting included, and a
+/// return after the set cleared), and quiet while it stays the same. Instance state, per mesh.
+/// </summary>
+public sealed class UndeliveredWarningGate
+{
+    private System.Collections.Immutable.ImmutableDictionary<string, string> lastLogged =
+        System.Collections.Immutable.ImmutableDictionary<string, string>.Empty
+            .WithComparers(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when <paramref name="undelivered"/> differs from what was last reported for
+    /// <paramref name="registryName"/>, recording it; an empty set clears the memory so a later
+    /// return of the condition warns again.
+    /// </summary>
+    /// <param name="registryName">The registry's display name.</param>
+    /// <param name="undelivered">What the registry did not offer this pass.</param>
+    public bool ShouldWarn(string registryName, IReadOnlyCollection<UndeliveredModule> undelivered)
+    {
+        ArgumentNullException.ThrowIfNull(registryName);
+        ArgumentNullException.ThrowIfNull(undelivered);
+        if (undelivered.Count == 0)
+        {
+            System.Collections.Immutable.ImmutableInterlocked.TryRemove(ref lastLogged, registryName, out _);
+            return false;
+        }
+
+        // Length-prefixed so an id containing ':' or '|' cannot collide with another set; a set,
+        // so the same package listed twice in one pass is one entry.
+        var signature = string.Join("|", undelivered
+            .Select(u => $"{u.PackageId.Length}:{u.PackageId}{(u.Module ?? "").Length}:{u.Module}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
+        var changed = false;
+        System.Collections.Immutable.ImmutableInterlocked.AddOrUpdate(
+            ref lastLogged, registryName,
+            _ => { changed = true; return signature; },
+            (_, previous) =>
+            {
+                changed = !string.Equals(previous, signature, StringComparison.Ordinal);
+                return signature;
+            });
+        return changed;
+    }
+}

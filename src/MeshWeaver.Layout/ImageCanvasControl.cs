@@ -73,6 +73,18 @@ public record ImageCanvasControl(object Image, object Alt)
     /// </summary>
     public object? NewShape { get; init; }
 
+    /// <summary>
+    /// The selected shape: a binding to the full-list index of the selected element in
+    /// <see cref="Shapes"/> (<c>-1</c>, absent or out of range = none). The renderer WRITES it
+    /// whenever the viewer selects or deselects, draws a shape (the new one becomes selected) or
+    /// deletes the selected one, and FOLLOWS it when the bound value changes. That makes the
+    /// selection visible to the page, which can then show and edit the selected shape's other
+    /// properties (its colour, its text) beside the canvas, and lets the selection survive a
+    /// re-render. A literal is display-only; absent = the selection stays the renderer's own view
+    /// state, as before.
+    /// </summary>
+    public object? Selected { get; init; }
+
     /// <summary>Whether shapes are bound — the renderer offers the shape tools only then.</summary>
     public bool HasShapes => Shapes is not null;
 
@@ -101,6 +113,11 @@ public record ImageCanvasControl(object Image, object Alt)
     /// <returns>A new <see cref="ImageCanvasControl"/> with the shape tools bound.</returns>
     public ImageCanvasControl WithShapes(object shapes, object tool, object? newShape = null)
         => this with { Shapes = shapes, Tool = tool, NewShape = newShape };
+
+    /// <summary>Binds the selected shape's index (<see cref="Selected"/>).</summary>
+    /// <param name="selected">The full-list index of the selected shape, typically a binding the renderer writes back; -1 = none.</param>
+    /// <returns>A new <see cref="ImageCanvasControl"/> with the selection bound.</returns>
+    public ImageCanvasControl WithSelection(object selected) => this with { Selected = selected };
 
     /// <summary>Sets the tallest the picture is drawn.</summary>
     /// <param name="maxHeight">A CSS length, or a binding.</param>

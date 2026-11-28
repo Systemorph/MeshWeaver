@@ -62,6 +62,41 @@ public class BlockedThreadStacksThreadExitTest
     }
 
     /// <summary>
+    /// 🚨 Regression (core #8629's shard 6): createdump logged <c>ptrace(ATTACH, tid) ... No such process</c>
+    /// for a thread that had just exited, aborted, and the runtime reported the dump as WRITTEN: no error,
+    /// no file. That is the same race the thrown shape is retried for, so the first dump returns over no
+    /// file and the second is real.
+    /// </summary>
+    [Fact]
+    public void AWriterThatReturnsOverNoFileOnce_IsTakenAgain()
+    {
+        var dumps = 0;
+        var stacks = new BlockedThreadStacks(writeDump: path =>
+        {
+            if (Interlocked.Increment(ref dumps) == 1)
+                return;
+            BlockedThreadStacks.WriteDumpOfThisProcess(path);
+        });
+
+        var thread = new Thread(() => ParkedWhileAnUnrelatedThreadExits()) { IsBackground = true, Name = "parked" };
+        try
+        {
+            thread.Start();
+            SpinWait.SpinUntil(() => Volatile.Read(ref parked) == 1, Budget)
+                .Should().BeTrue("precondition: the thread whose stack is wanted is parked before the capture");
+
+            var captured = stacks.Capture([thread.ManagedThreadId]);
+
+            captured[thread.ManagedThreadId].Should().Contain(nameof(ParkedWhileAnUnrelatedThreadExits));
+            dumps.Should().BeInRange(2, BlockedThreadStacks.MaxDumpAttempts, "the file-less dump is taken again, bounded");
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+    }
+
+    /// <summary>
     /// 🚨 Regression (core #8409's shard 4): the runtime hands back at most 1023 characters of createdump's
     /// error, and createdump writes a tolerated <c>ptrace(ATTACH, tid) … No such process (3)</c> line for every
     /// thread already gone BEFORE the line that fails the dump. With a dozen threads stopping, the fatal line
