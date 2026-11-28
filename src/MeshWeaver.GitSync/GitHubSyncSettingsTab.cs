@@ -509,8 +509,9 @@ public static class GitHubSyncSettingsTab
     /// (status is never stored — never replicated), and a link row bound to the node's handle.
     /// Empty until a draft is created.
     /// </summary>
-    private static UiControl BuildPullRequestEditor(
-        PullRequestService prService, string spacePath, string? prPath, string userId, string? locale = null)
+    internal static UiControl BuildPullRequestEditor(
+        PullRequestService prService, string spacePath, string? prPath, string userId, string? locale = null,
+        string activityPathId = ActivityPathId, string resultId = ResultId)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap:12px;");
         if (string.IsNullOrEmpty(prPath))
@@ -528,8 +529,8 @@ public static class GitHubSyncSettingsTab
             {
                 // Runs as an activity (progress + cancel shown in the Sync section's activity panel).
                 ctx.Host.Hub.OpenPullRequestOnGitHub(spacePath, prPath, userId,
-                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
-                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
+                        onActivityCreated: path => ctx.Host.UpdateData(activityPathId, path))
+                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(resultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
             }));
         // Status is GitHub-owned: we ASK GitHub live, never store/replicate it.
@@ -537,10 +538,10 @@ public static class GitHubSyncSettingsTab
             .WithAppearance(Appearance.Outline)
             .WithClickAction(ctx =>
             {
-                ctx.Host.UpdateData(ResultId, ActionNotice.Info(LocalizationCatalog.Get("ui.gitSync.tab.askingPrStatus", ctx.Host.ViewerLocale())));
+                ctx.Host.UpdateData(resultId, ActionNotice.Info(LocalizationCatalog.Get("ui.gitSync.tab.askingPrStatus", ctx.Host.ViewerLocale())));
                 prService.AskStatus(spacePath, prPath, userId).Subscribe(
-                    info => ctx.Host.UpdateData(ResultId, ActionNotice.Success(LocalizationCatalog.Get("ui.gitSync.tab.prStatus", ctx.Host.ViewerLocale(), info.Status))),
-                    ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
+                    info => ctx.Host.UpdateData(resultId, ActionNotice.Success(LocalizationCatalog.Get("ui.gitSync.tab.prStatus", ctx.Host.ViewerLocale(), info.Status))),
+                    ex => ctx.Host.UpdateData(resultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
             }));
         stack = stack.WithView(actions);
