@@ -5303,8 +5303,6 @@ jobs:
         include:
           - satellite: MeshWeaver.SocialMedia
             repository: Systemorph/MeshWeaver.SocialMedia
-          - satellite: MeshWeaver.Crm
-            repository: Systemorph/MeshWeaver.Crm
           - satellite: MeshWeaver.Reinsurance
             repository: Systemorph/MeshWeaver.Reinsurance
           # Education runs no compile-check on its own PRs and carries no allow file, so its leg

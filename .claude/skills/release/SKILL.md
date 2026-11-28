@@ -113,7 +113,7 @@ Enforced by `Governance/Standards/release.cut` in MeshWeaver.Plugins — 7 repos
 Check it first — it is the cheapest gate here and it stops everything:
 
 ```bash
-REPOS="MeshWeaver MeshWeaver.Plugins MeshWeaver.Crm MeshWeaver.SocialMedia
+REPOS="MeshWeaver MeshWeaver.Plugins MeshWeaver.SocialMedia
        MeshWeaver.Reinsurance MeshWeaver.Manufacturing MeshWeaver.Education"
 
 # Fail CLOSED first. A label that does not exist answers 0 open issues, which reads as GREEN.
