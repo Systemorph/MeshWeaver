@@ -110,7 +110,7 @@ automatically deployed. The recorded CI cleanup carried a 7-day/count-based wind
 2026-09-13; it now records this page's 30-day, no-quota policy, and
 `lock-pinned-digests.py --check-retention-record` asserts it over every recorded step on
 every pull request. The LIVE task now carries it too — installed, still disabled and dry-run,
-by the governed `RegistryRetention` apply [`Ops/Actions/registry-retention-apply-20261101b-3438`](https://control.systemorph.com/Ops/Actions/registry-retention-apply-20261101b-3438) on the control instance ([Memex run 41419066636](https://github.com/Systemorph/Memex/actions/runs/41419066636), 2026-11-02 09:16Z) — so the record and the registry agree byte for byte and no drift is declared.
+by the governed `RegistryRetention` apply [`Ops/Actions/registry-retention-apply-20261101b-3438`](https://control.net.meshweaver.cloud/Ops/Actions/registry-retention-apply-20261101b-3438) on the control instance ([Memex run 41419066636](https://github.com/Systemorph/Memex/actions/runs/41419066636), 2026-11-02 09:16Z) — so the record and the registry agree byte for byte and no drift is declared.
 Update the live task only with the coordinated protection path ready,
 a reviewed report-only deletion list, and verification that the superseded task stays
 disabled. Verify the actual purge-tool version enforces age for untagged artifacts and
