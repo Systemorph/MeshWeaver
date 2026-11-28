@@ -180,7 +180,6 @@ PRIVATE_NAMES_ALREADY_PUBLIC = frozenset({
     "Systemorph/Memex",
     "Systemorph/MeshWeaver.Plugins",
     "Systemorph/MeshWeaver.Deploy",
-    "Systemorph/MeshWeaver.Crm",
     "Systemorph/MeshWeaver.Education",
     "Systemorph/MeshWeaver.Reinsurance",
     "Systemorph/MeshWeaver.SocialMedia",

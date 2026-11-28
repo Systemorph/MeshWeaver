@@ -35,7 +35,7 @@ namespace MeshWeaver.Graph.Test;
 /// on memex.systemorph.com on 2026-09-11: <c>Crm/Offer</c> declares
 /// <c>"creatableTypes": ["Crm/Question"]</c>, <c>Fabrikam/Commercials</c> is a
 /// <c>Crm/Offer</c>, and its Create area offered ~90 types, none of them <c>Crm/*</c>
-/// (<c>Systemorph/MeshWeaver.Crm#82</c> shipped green through every gate on that basis).</para>
+/// (the CRM's change shipped green through every gate on that basis).</para>
 ///
 /// <para><b>The shape reconstructed here</b> is exactly that one: the declaring type and the
 /// declared type live in partition <c>Ct…</c>, the INSTANCE lives in partition <c>Ho…</c>, so the
@@ -136,7 +136,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
 
     /// <summary>
     /// 🚨 THE NEGATIVE CONTROL. The retired literals cannot reach a type declared outside the
-    /// instance's ancestor chain — which is precisely why <c>MeshWeaver.Crm#82</c> was inert. If
+    /// instance's ancestor chain — which is precisely why the CRM's declaration was inert. If
     /// the literals ever DID reach it, the acceptance test below would be passing for a reason that
     /// has nothing to do with the declaration, and would keep passing after a revert.
     /// </summary>
@@ -152,7 +152,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
         baseline.Should().NotBeEmpty("a control that measured nothing controls nothing");
         baseline.Should().NotContain($"{types}/Question",
             "the declared type lives in ANOTHER partition, so no namespace-scoped query from the "
-            + "instance reaches it — this is the Crm#82 measurement, reconstructed");
+            + "instance reaches it — this is the CRM measurement, reconstructed");
     }
 
     /// <summary>
@@ -179,7 +179,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
             + "re-admit every discovered type and defeat the parent's restriction");
         offered.Should().Contain($"{types}/Question",
             "the parent's NodeType declares CreatableTypes: [\"{0}/Question\"] — that is the whole "
-            + "point of the setting, and it is what MeshWeaver.Crm#82 asked for", types);
+            + "point of the setting, and it is what the CRM asked for", types);
 
         var control = PickerPaths(await RenderedTypePicker($"{host}/Thing"));
         control.Should().NotContain($"{types}/Question",

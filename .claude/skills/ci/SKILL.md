@@ -301,7 +301,7 @@ made after it. Full reference:
 > digest pin (the platform is resolved at run time to the newest SEALED set, #3842), and there is no
 > `meshweaver-framework-released` receiver: the per-build release wave is off by default
 > (`Hosting:PlatformBuilds:BroadcastFrameworkReleases`, Plugins#1707) and Plugins#1709 /
-> Reinsurance#198 / Crm#91 / Education#320 / SocialMedia#178 / Manufacturing#79 dropped the type. A
+> Reinsurance#198 / Education#320 / SocialMedia#178 / Manufacturing#79 dropped the type. A
 > satellite runs the shape above on its own pushes and once a day (`schedule`, staggered 03:03 →
 > 03:56 UTC); the daily run is the full run and is what validates a platform build. Only
 > `meshweaver-upstream-published` (a satellite's own publication reaching its declared dependents)

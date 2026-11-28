@@ -135,10 +135,6 @@ public class PlatformNeverDependsOnPluginsGuard
         "MeshWeaver.Reinsurance",
         "MeshWeaver.SocialMedia",
         "MeshWeaver.Manufacturing",
-        // Added 2026-09-12 with `satellite-compat`, the first workflow here to name it in an
-        // actionable form. Absent from this list the detector was blind to a Crm reach by
-        // construction — exactly the "stops seeing its subject" defect the summary describes.
-        "MeshWeaver.Crm",
     ];
 
     /// <summary>

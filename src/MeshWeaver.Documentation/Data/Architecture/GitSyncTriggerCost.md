@@ -482,7 +482,7 @@ already rejected. `schedule` accounts for 112 of the 254 (44 %), the probe alone
   left `Underwriting/_GitSync` 38 h behind a merged main with every delivery answering 200 OK.
 
 🚨 **And the class has a correctness half, not only a cost half.** `Auto-update green armed PRs`
-(`cron: "*/10 * * * *"` in Reinsurance, SocialMedia and MeshWeaver.Crm) does nothing but call
+(`cron: "*/10 * * * *"` in Reinsurance and SocialMedia) does nothing but call
 `gh api … /update-branch` on armed PRs — it checks out nothing — and in the 48 h to
 2026-09-10T19:36Z it recorded **20 green build completions for
 `MeshWeaver.Reinsurance@7d29a303`** and **40+ for `MeshWeaver.SocialMedia@07cc155e`**, both of them

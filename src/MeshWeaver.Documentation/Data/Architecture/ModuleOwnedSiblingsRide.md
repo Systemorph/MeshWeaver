@@ -86,8 +86,7 @@ always really about.
 ### 3. What it costs — and why the surviving ride is safe
 
 `MeshWeaver.Plugins` publish-bake (job `103160836446`, 05:43:41Z) and its gate shard
-(`103159059393`), and `MeshWeaver.Crm` publish-bake (run `34567369849`, job `103166073109`,
-06:11:35Z) — the last composing `ai.module.nupkg` and `essentials.module.nupkg` side by side, which
+(`103159059393`), and a satellite publish-bake (06:11:35Z) — the last composing `ai.module.nupkg` and `essentials.module.nupkg` side by side, which
 is the pair the 2026-09-08 hold named:
 
 ```text
@@ -360,8 +359,8 @@ while the fresh `ai.module.nupkg` (AI bakes no bundle, so nothing held it) rode 
 `4959162f…`. The compose-time verdict had read `0 carried at more than one BUILD` twenty minutes
 earlier, over the fresh pair. Every satellite gate composing AI and Essentials from that publication
 then refused it (`sealed 1d59587d64a3a4e3 as the declared module of essentials.module.nupkg` /
-`sealed 4959162fe5738a14 as a sibling riding ai.module.nupkg`) — MeshWeaver.Crm, .SocialMedia and
-.Manufacturing, from their 20:11Z `meshweaver-upstream-published` runs on. The fleet registry
+`sealed 4959162fe5738a14 as a sibling riding ai.module.nupkg`) — MeshWeaver.SocialMedia,
+.Manufacturing and a third satellite, from their 20:11Z `meshweaver-upstream-published` runs on. The fleet registry
 recorded the same thing from the other side: the `essentials` bundle manifest pushed at 20:10Z had
 the byte-identical digest (`sha256:0f55c103…`) of the one pushed at 15:44Z.
 
@@ -462,7 +461,7 @@ Measured 2026-09-11 over every `uses: Systemorph/MeshWeaver/.github/workflows/�
 refusal the hour it merged and there is no pin to move; only `MeshWeaver.Education` pins a sha
 (`67cbbe0e…`), and the verdict is absent from that file at that sha. Both directions are read off
 the LOGS rather than inferred from the ref — MeshWeaver.Plugins run `34563887604` and
-MeshWeaver.Crm run `34567369849` (both 2026-09-11, both `success`) print the
+a satellite run the same day (both 2026-09-11, both `success`) print the
 `module set: … carried at more than one BUILD` line, and MeshWeaver.Education's publish-bake for run
 `34487980275` composes the same four bundles and prints no such line at all. So nothing has to be
 sequenced for five of six; what is left is Education's pin, and until it moves that repo's

@@ -1049,7 +1049,7 @@ with a known pass).
 ## Node repos run the same lane — as reusable workflows
 
 Every satellite content repo (MeshWeaver.Plugins, MeshWeaver.Education, MeshWeaver.Reinsurance,
-MeshWeaver.SocialMedia, MeshWeaver.Crm, MeshWeaver.Manufacturing) bakes and publishes its own
+MeshWeaver.SocialMedia, MeshWeaver.Manufacturing) bakes and publishes its own
 content through the SAME contract, and since #1707 the jobs live HERE, as reusable `workflow_call`
 workflows the satellites call instead of vendoring. Adoption is **per job**: the target is that
 every repo calls `node-repo-publish-bake` (the lane whose script contract must not drift), while a
@@ -1143,7 +1143,6 @@ does not run it. Measured against every satellite's `main`, 2026-09-07:
 | MeshWeaver.Reinsurance | `1b5350d54` | ✅ | **0 violations** |
 | MeshWeaver.Manufacturing | `1b5350d54` | ✅ | 0 (adopted 2026-09-07, #3504) |
 | MeshWeaver.Plugins | `c7fef7a2d` | ✅ | 0 (adopted 2026-09-07, #3504) |
-| MeshWeaver.Crm | `0a2b9017d` → `c7fef7a2d` | ❌ → ✅ | **4** — incl. `MW_REGISTRY_KEY` → 0 (adopted 2026-09-07 12:30Z, `9228b8be`) |
 | MeshWeaver.SocialMedia | `0a2b9017d` → `c7fef7a2d` | ❌ → ✅ | **4** — incl. `MW_REGISTRY_KEY` → 0 (adopted 2026-09-07 12:30Z, `9dea3668`) |
 | MeshWeaver.Education | `8ffbe4762` → `c7fef7a2d` | ❌ → ✅ | **4** → 0 (adopted 2026-09-07, Education#283) |
 
@@ -1470,7 +1469,7 @@ the satellite already has for its gates.
    ```
 
    Measured 2026-09-08: MeshWeaver.Manufacturing's poll failed this way in its `test-repos` gate
-   (Manufacturing#67) and MeshWeaver.Crm's in its `publish-bake` (Crm#66) — two repositories, one
+   (Manufacturing#67) and another satellite's in its `publish-bake` — two repositories, one
    recipe, both of them faithful to what this page used to say. MeshWeaver.Reinsurance#179 is the
    landed shape.
 
@@ -1519,7 +1518,7 @@ gate runs.
 publication to the control instance, which dispatches `meshweaver-upstream-published` to every
 repository declaring that source. The wake carries **both** images of the upstream's wave, so the
 rebuild lands on the identity the dependency is actually sealed for. Measured 2026-09-08 on
-MeshWeaver.Crm — a `meshweaver-framework-released` run failed the availability gate at 15:36Z and
+a satellite — a `meshweaver-framework-released` run failed the availability gate at 15:36Z and
 the `meshweaver-upstream-published` wake for the same set succeeded at 16:01Z.
 
 🚨 **The poll does NOT retry the identity it failed on**, and this lane's message used to claim it
@@ -1844,7 +1843,6 @@ that calls this lane, on each one's newest successful publish-bake:
 | MeshWeaver.Education | 43 | 0 | **0** |
 | MeshWeaver.SocialMedia | 43 | 0 | **0** |
 | MeshWeaver.Manufacturing | 34 | 0 | **0** |
-| MeshWeaver.Crm | 34 | 0 | **0** |
 
 So no caller depends on the gate compiling; adoption is the path that already carries all of them.
 (MeshWeaver.Reinsurance published no successful bake in its newest 25 `main` runs — unmeasured
