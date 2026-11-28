@@ -1706,6 +1706,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         => persisted.CreatedDate != default && live.CreatedDate != default
            && StorageIncarnation.Normalize(persisted.CreatedDate) > StorageIncarnation.Normalize(live.CreatedDate);
 
+    /// <summary>True when <paramref name="persisted"/> is an EARLIER incarnation than <paramref name="live"/>
+    /// (the deleted node's lagged echo): refused whatever its version, since the deleted node's
+    /// counter may have run higher than the recreate's.</summary>
+    private static bool IsEarlierIncarnation(MeshNode persisted, MeshNode live)
+        => persisted.CreatedDate != default && live.CreatedDate != default
+           && StorageIncarnation.Normalize(persisted.CreatedDate) < StorageIncarnation.Normalize(live.CreatedDate);
+
     /// <summary>
     /// The caller's AUTHENTICATED context, captured synchronously on the caller's thread — the
     /// same precedence (<c>Context ?? CircuitContext</c>) every write path uses for attribution.
@@ -1897,8 +1904,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // CreatedDate is LATER than the live node's is a recreate and is adopted
                             // whatever its version; the same incarnation at a lower version is still
                             // a lagged echo, and an EARLIER incarnation never replaces a later one.
-                            if (updated.Version <= current.Version
-                                && !IsLaterIncarnation(updated, current))
+                            if (IsEarlierIncarnation(updated, current)
+                                || (updated.Version <= current.Version
+                                    && !IsLaterIncarnation(updated, current)))
                             {
                                 EmitOnce(current);
                                 return null;

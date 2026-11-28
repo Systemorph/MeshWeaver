@@ -78,7 +78,7 @@ public class ARecreateOnALiveOwnerIsAdoptedTest(ITestOutputHelper output) : Mono
             .Where(n => n?.Name == "Recreated")
             .Should().Within(TestTimeouts.Convergence).Emit(
                 "the owner must serve the recreate, not the deleted node", cancellationToken: ct);
-        adopted!.Version.Should().BeLessThan(3, "the recreate restarted the version counter");
+        adopted!.Version.Should().Be(1, "the recreate restarted the version counter at 1");
     }
 
     [Fact(Timeout = 120_000)]
@@ -118,6 +118,15 @@ public class ARecreateOnALiveOwnerIsAdoptedTest(ITestOutputHelper output) : Mono
         };
         after = await stream.AdoptPersisted(olderIncarnation).Should().Emit(cancellationToken: ct);
         after.Name.Should().Be(current.Name, "an EARLIER incarnation never replaces a later one");
+        after.Version.Should().Be(current.Version);
+
+        // The lagged echo of the DELETED incarnation can carry a HIGHER version than the recreate.
+        var olderHigher = current with
+        {
+            Name = "Deleted node echo", Version = current.Version + 5, CreatedDate = current.CreatedDate.AddSeconds(-5),
+        };
+        after = await stream.AdoptPersisted(olderHigher).Should().Emit(cancellationToken: ct);
+        after.Name.Should().Be(current.Name, "an earlier incarnation is refused even at a higher version");
         after.Version.Should().Be(current.Version);
     }
 }
