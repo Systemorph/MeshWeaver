@@ -93,6 +93,50 @@ public class DisposalDrainLaneTest : HubTestBase
     }
 
     /// <summary>
+    /// The mass-teardown shape of the 2026-11-28 memex-cloud recurrence (#5799), at the scheduler level
+    /// where it is deterministic: a few lane threads held by blocking turns (below the cap) must not
+    /// starve the other ~300 queued drains, and the lane's own state — what a stall verdict now names —
+    /// reads the held threads and the queue while it is loaded.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task BlockedLaneSlots_BelowTheCap_DoNotStarveTheQueuedDrains_AndTheStateIsReadable()
+    {
+        using var lane = new DisposalDrainLane();
+        const int blocked = 8;
+        const int queued = 300;
+        // No hand-woven gate (HandWovenGateRatchetGuard): the blockers hold their lane thread by
+        // spinning on a flag, and the test learns they started from a counter.
+        var release = 0;
+        var started = 0;
+        try
+        {
+            var holders = Enumerable.Range(0, blocked).Select(_ => Task.Factory.StartNew(() =>
+            {
+                Interlocked.Increment(ref started);
+                SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.Convergence);
+            }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, lane.Scheduler)).ToArray();
+            SpinWait.SpinUntil(() => Volatile.Read(ref started) == blocked, TestTimeouts.Quick)
+                .Should().BeTrue("the blockers occupy lane threads");
+
+            var drains = Enumerable.Range(0, queued).Select(_ => Task.Factory.StartNew(
+                () => Thread.CurrentThread.Name, CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach | TaskCreationOptions.PreferFairness, lane.Scheduler)).ToArray();
+
+            var names = await Task.WhenAll(drains).WaitAsync(TestTimeouts.Quick, TestContext.Current.CancellationToken);
+            names.Should().OnlyContain(n => n == DisposalDrainLane.ThreadName,
+                "every queued drain ran on a lane thread although {0} slots stayed blocked", blocked);
+
+            var state = lane.DescribeState();
+            state.Should().Contain("liveThreads=").And.Contain("tasksQueued=0");
+            holders.Should().OnlyContain(h => !h.IsCompleted, "the blockers were held the whole time");
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+    }
+
+    /// <summary>
     /// A dispose action whose store I/O is slow must not hold a lane thread: its leaf runs on the I/O
     /// pool (<c>IIoPool.Invoke</c>), so the lane's drain ends and the thread is free while the I/O is
     /// still outstanding (#5799 recurrence — memex-cloud's 30 s Npgsql timeout on a dispose action).
