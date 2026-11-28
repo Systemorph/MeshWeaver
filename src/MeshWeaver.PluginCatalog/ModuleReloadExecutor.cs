@@ -96,20 +96,9 @@ public static class ModuleReloadExecutor
     /// status and the next activation resumes it — so it is Information; anything else is a real
     /// fault and stays an Error, naming the real exception.
     /// </summary>
-    internal static void LogStopped(ILogger? logger, Exception ex, Address address)
-    {
-        var cause = ex;
-        while (cause is System.Reflection.TargetInvocationException { InnerException: { } inner })
-            cause = inner;
-        if (FaultClassifier.IsHubDisposalOf(cause, address) || FaultClassifier.IsDisposedContainer(cause))
-            logger?.LogInformation(
-                "[ModuleReload] the executor on {Path} stopped because its hub is shutting down — the request keeps its last status; "
-                + "the next activation of this node resumes it", address);
-        else
-            logger?.LogError(cause,
-                "[ModuleReload] the executor on {Path} stopped — the request keeps its last status; "
-                + "the next activation of this node resumes it", address);
-    }
+    internal static void LogStopped(ILogger? logger, Exception ex, Address address) =>
+        ExecutorStopLog.Report(logger, ex, address, "[ModuleReload]",
+            "the request keeps its last status; the next activation of this node resumes it");
 
     /// <summary>One activation's state: which steps it has already started (an echo of its own
     /// write must not start the same step twice). Instance state of the activation, never static.</summary>

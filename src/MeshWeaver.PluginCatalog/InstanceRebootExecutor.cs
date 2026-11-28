@@ -141,6 +141,11 @@ public static class InstanceRebootExecutor
                     .Then(RebootText.Or(outcome.LandedBefore, "reboot.word.nothing"))
                     .Then(RebootText.Of("reboot.adopt.keepsRunning"));
 
+    /// <summary>Reports why the executor's step chain ended (<see cref="ExecutorStopLog"/>).</summary>
+    internal static void LogStopped(ILogger? logger, Exception ex, Address address) =>
+        ExecutorStopLog.Report(logger, ex, address, "[Reboot]",
+            "the request keeps its last status; the next activation of this node resumes it");
+
     /// <summary>Arms the executor on a request node's own hub. Registered as the node type's initialization.</summary>
     public static IObservable<Unit> Arm(IMessageHub hub)
     {
@@ -156,9 +161,7 @@ public static class InstanceRebootExecutor
             .Concat()
             .Subscribe(
                 _ => { },
-                ex => logger?.LogError(ex,
-                    "[Reboot] the executor on {Path} stopped — the request keeps its last status; "
-                    + "the next activation of this node resumes it", hub.Address)));
+                ex => LogStopped(logger, ex, hub.Address)));
         // 🚨 The OWNER answers "end it if it stalled" (MeshWeaver#6625) — a separate subscription, so a
         // step that never returns (the very thing that stalls a request) cannot hold the answer back
         // behind the Concat above. The judgement and the terminal transition happen in ONE update on

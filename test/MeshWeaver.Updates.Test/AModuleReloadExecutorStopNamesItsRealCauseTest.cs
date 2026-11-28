@@ -25,6 +25,30 @@ public class AModuleReloadExecutorStopNamesItsRealCauseTest
             Func<TState, Exception?, string> formatter) => Entries.Add((logLevel, exception));
     }
 
+    /// <summary>Each control-plane executor reports its stop through the one shared helper.</summary>
+    public static IEnumerable<object[]> Executors() =>
+    [
+        [(Action<ILogger?, Exception, Address>)ModuleReloadExecutor.LogStopped, "[ModuleReload]"],
+        [(Action<ILogger?, Exception, Address>)PackageUninstallExecutor.LogStopped, "[PackageUninstall]"],
+        [(Action<ILogger?, Exception, Address>)InstanceRebootExecutor.LogStopped, "[Reboot]"],
+    ];
+
+    [Theory]
+    [MemberData(nameof(Executors))]
+    public void EveryExecutorUnwrapsAndClassifiesItsStop(Action<ILogger?, Exception, Address> logStopped, string _)
+    {
+        var disposal = new Recorder();
+        logStopped(disposal, new TargetInvocationException(new HubDisposingException(Hub, "/MeshNode")), Hub);
+        Assert.Equal(LogLevel.Information, Assert.Single(disposal.Entries).Level);
+
+        var fault = new Recorder();
+        var real = new InvalidOperationException("boom");
+        logStopped(fault, new TargetInvocationException(real), Hub);
+        var entry = Assert.Single(fault.Entries);
+        Assert.Equal(LogLevel.Error, entry.Level);
+        Assert.Same(real, entry.Ex);
+    }
+
     [Fact]
     public void AWrappedDisposalOfItsOwnHubIsNotAnError()
     {
