@@ -79,6 +79,7 @@ public class APackageFailureIsAnErrorNotARefusalTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public void ASweepThatCouldNotRun_StillRefuses_UnderTheDeclaredDefault()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var gate = new NodeTypeBakeGateState { GatesReadiness = true, PackageFailuresRefuseReadiness = false };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
@@ -92,6 +93,7 @@ public class APackageFailureIsAnErrorNotARefusalTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public void AnUnmeasurableAdoption_StillRefuses_UnderTheDeclaredDefault()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var gate = new NodeTypeBakeGateState { GatesReadiness = true, PackageFailuresRefuseReadiness = false };
         gate.MarkRunning("adopting");
 
@@ -105,6 +107,7 @@ public class APackageFailureIsAnErrorNotARefusalTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public void ACompileErrorOnAHealthyType_IsRecordedAsErrored_AndDoesNotGate()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var gate = new NodeTypeBakeGateState { GatesReadiness = true, PackageFailuresRefuseReadiness = false };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
@@ -125,6 +128,7 @@ public class APackageFailureIsAnErrorNotARefusalTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public void TheStrictOption_KeepsTheOriginalRefusal()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var gate = new NodeTypeBakeGateState { GatesReadiness = true, PackageFailuresRefuseReadiness = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
@@ -139,6 +143,7 @@ public class APackageFailureIsAnErrorNotARefusalTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public void TheClassDefaultIsStrict_AndTheHostRegistrationDeclaresThePolicy()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         new NodeTypeBakeGateState().PackageFailuresRefuseReadiness.Should().BeTrue(
             "a state built directly keeps the strict reading, so existing unit pins stay meaningful");
 
@@ -169,6 +174,7 @@ public class APackageFailureIsAnErrorNotARefusalTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public void AnErrorStampHeldWhileTheSweepMeasures_IsReleasedOnAdmission_AndRefusedUnderStrict()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         foreach (var strict in new[] { false, true })
         {
             var gate = new NodeTypeBakeGateState { GatesReadiness = true, PackageFailuresRefuseReadiness = strict };
@@ -207,6 +213,7 @@ public class APackageFailureIsAnErrorNotARefusalTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public void AnUncoveredTypeOnAnAdoptOnlyBoot_IsNamedAndDoesNotHoldTheRoll()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var gate = new NodeTypeBakeGateState { GatesReadiness = true, PackageFailuresRefuseReadiness = false };
         gate.MarkRunning("adopting");
         var report = new NodeTypeBakeReport(

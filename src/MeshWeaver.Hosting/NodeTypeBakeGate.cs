@@ -856,7 +856,7 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
         var head = $"bake NOT PROVEN — the sweep errored before it could verify this image: {message}";
         var addenda = new List<string>(6);
         if (!errored.IsEmpty)
-            addenda.Add($"{errored.Count} at Error on this image, the roll proceeds — "
+            addenda.Add($"{errored.Count} at Error on this image (this verdict still refuses readiness) — "
                 + string.Join(", ", errored.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!unevaluated.IsEmpty)
             addenda.Add($"{unevaluated.Count} not evaluated — "
