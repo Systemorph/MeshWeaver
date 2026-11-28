@@ -69,8 +69,8 @@ public class APackageFailureIsAnErrorNotARefusalTest(ITestOutputHelper output)
                         && !string.IsNullOrWhiteSpace(d.CompilationError),
                 "the Error outcome is PUBLISHED to the mesh with its named refusal — the pod used to "
                 + "refuse to write it", ct);
-        published!.CompilationError.Should().Contain("Untracked module content");
-        published.CompiledFrameworkVersion.Should().NotBe(PrebuiltAssemblySeeder.LiveFrameworkMvid,
+        published?.CompilationError.Should().Contain("Untracked module content");
+        published?.CompiledFrameworkVersion.Should().NotBe(PrebuiltAssemblySeeder.LiveFrameworkMvid,
             "no verified stamp for this framework is written for a build nobody verified");
     }
 
