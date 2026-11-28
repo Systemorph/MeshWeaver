@@ -120,6 +120,9 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// instance state, one per mesh.</summary>
     private readonly HeldNodeTypeBundleRetry heldBundles = new();
 
+    /// <summary>Warns about a registry's undelivered modules once per CHANGE, not once per pass.</summary>
+    private readonly UndeliveredWarningGate undeliveredWarnings = new();
+
     /// <summary>The boot reconcile's end, replayed to whoever asks after the fact.</summary>
     private readonly AsyncSubject<Unit> bootReconciled = new();
 
@@ -1007,13 +1010,22 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 packages))
             .Do(undelivered =>
             {
-                if (!undelivered.IsEmpty)
-                    // Warning, and ONE line for the whole registry: this stays true on every pass
-                    // for as long as the grant does, so a line per package would be a repeated
-                    // flood of the same fact.
+                if (undelivered.IsEmpty)
+                {
+                    undeliveredWarnings.ShouldWarn(name, undelivered);
+                    return;
+                }
+                // ONE line for the whole registry, and only when the set CHANGED: the fact stays
+                // true on every pass for as long as the grant does and is already recorded on the
+                // ledger, so repeating the Warning each pass was hundreds of identical lines a day.
+                if (undeliveredWarnings.ShouldWarn(name, undelivered))
                     logger.LogWarning(
                         "[RegistryUpdate] {Report} Recorded on {Ledger}.",
                         ModuleDelivery.Describe(undelivered, name), LedgerPath);
+                else
+                    logger.LogDebug(
+                        "[RegistryUpdate] {Name} still does not offer {Count} installed module package(s) (unchanged; see {Ledger}).",
+                        name, undelivered.Count, LedgerPath);
             })
             .Select(undelivered => (ImmutableList<UndeliveredModule>?)undelivered)
             .Catch((Exception ex) =>
