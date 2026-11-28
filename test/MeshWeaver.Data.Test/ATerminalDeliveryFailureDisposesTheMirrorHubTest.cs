@@ -35,7 +35,7 @@ public class ATerminalDeliveryFailureDisposesTheMirrorHubTest(ITestOutputHelper 
 
         var ended = mirror.Materialize()
             .Where(n => n.Kind == NotificationKind.OnError)
-            .Select(n => n.Exception!)
+            .Select(n => n.Exception ?? throw new InvalidOperationException("an OnError notification carries no exception"))
             .Replay(1);
         using var connection = ended.Connect();
 
