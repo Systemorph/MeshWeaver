@@ -77,7 +77,7 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
     /// the CURRENT one. The real <see cref="NodeTypeBakeGateState"/> throughout: the point is to
     /// exercise its own <c>Admission</c> derivation, never a stand-in for it.
     /// </summary>
-    private NodeTypeBakeGateState bake = new() { GatesReadiness = true };
+    private NodeTypeBakeGateState bake = new() { GatesReadiness = true, HoldsRollOnRegression = true };
 
     /// <summary>
     /// Registers this process's bake gate as the mesh's admission authority — the ONE wiring the

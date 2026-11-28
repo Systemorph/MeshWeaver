@@ -61,7 +61,7 @@ public class TheBakeGateCannotTakeAnInstanceDownTest
     {
         var outcome = DynamicTypePreWarmer.BaselineStamp(report)(
             new PreWarmOutcome(failingType, status, "CS1929: 'LayoutAreaHost' does not contain a definition for 'GetData'"));
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
         gate.MarkOutcome(outcome);
         gate.MarkComplete("baked");
@@ -159,7 +159,7 @@ public class TheBakeGateCannotTakeAnInstanceDownTest
         // The last path to a full outage: the enumeration errors on a restarted pod of the serving
         // image. There is no per-type evidence for the stamp to judge, so the served-build
         // witness is read on the gate itself.
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
         gate.MarkFaulted("enumeration timed out");
         gate.ReadinessGranted.Should().BeFalse("the negative control: an unproven bake on an image that never served refuses");
@@ -178,7 +178,7 @@ public class TheBakeGateCannotTakeAnInstanceDownTest
         // ServedBefore on the gate relaxes ONLY Faulted. A regression that reached the gate was
         // stamped regressable by a report that did not know the image had served; the gate does not
         // second-guess that verdict.
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkServedBefore();
         gate.MarkRunning("enumerating dynamic NodeTypes");
         gate.MarkOutcome(new PreWarmOutcome("Crm/Contact", PreWarmStatus.CompileError, "CS0246"));

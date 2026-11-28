@@ -139,6 +139,35 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// </summary>
     public bool AllowUnprovenBake { get; init; }
 
+    /// <summary>
+    /// 🚨 <b>Whether a measured regression HOLDS THE ROLL</b> — off by default since 2026-11-28
+    /// (maintainer: <i>"we should probably allow the update and error the code which does not
+    /// compile. like this it's difficult to even see what's happening"</i>). Declared by the host at
+    /// registration from <see cref="NodeTypeBakeGateExtensions.HoldRollOnRegressionConfigKey"/>,
+    /// exactly like <see cref="GatesReadiness"/>.
+    ///
+    /// <para><b>Off (the default): the platform rolls and the broken type is ERRORED.</b> A
+    /// <see cref="BakePhase.Regressed"/> pod is Ready and admitted, so the compile-failure stamps it
+    /// held are RELEASED: each type that does not compile on this image reads
+    /// <c>CompilationStatus: Error</c> with its <c>CompilationError</c> on its own record, where an
+    /// operator and the type's owner can see it. The regression is still recorded — the phase stays
+    /// Regressed, the detail still names every type, and the host check answers Healthy with the
+    /// errored types in its description — never Degraded, because the gate's verdicts stay Healthy
+    /// and Unhealthy only.</para>
+    ///
+    /// <para><b>Why the hold was retired.</b> Holding the roll on any one type made one package's
+    /// broken NodeType hold the whole platform (policy <c>platform-rolls-independently-of-packages</c>),
+    /// and it hid the evidence: a refused pod publishes nothing (#3478), so the records kept the old
+    /// image's <c>Ok</c> while the failure lived only in a pod log buried under its own probe lines.
+    /// Measured on pearl, 2026-11-27/28: three 4.x pods refused in turn on 7, 13 and 24 types, with no
+    /// compiler diagnostic reachable anywhere, while the instance stayed on 3.x.</para>
+    ///
+    /// <para><b>On</b>, the earlier contract holds: a regression refuses readiness and admission, and
+    /// the rollout stalls with the previous image serving. It never relaxes
+    /// <see cref="BakePhase.Faulted"/> (an unproven bake), which keeps its own hatch.</para>
+    /// </summary>
+    public bool HoldsRollOnRegression { get; init; }
+
     /// <summary>The current phase.</summary>
     public BakePhase Phase => (BakePhase)Volatile.Read(ref phase);
 
@@ -171,6 +200,9 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
         // already served here it is the image the rollout falls back on. Refusing it can only
         // take the instance down, which is what happened to memex.systemorph.com.
         BakePhase.Faulted => AllowUnprovenBake || ServedBefore,
+        // 2026-11-28: a measured regression errors the TYPE, not the image — unless the host opted
+        // back into holding the roll. See HoldsRollOnRegression.
+        BakePhase.Regressed => !HoldsRollOnRegression,
         _ => false,
     };
 
@@ -208,7 +240,7 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// <item><term><see cref="BakePhase.NotStarted"/></term><description>Provisional — armed, no verdict yet</description></item>
     /// <item><term><see cref="BakePhase.Running"/></term><description>Provisional — still measuring</description></item>
     /// <item><term><see cref="BakePhase.Complete"/></term><description>Admitted</description></item>
-    /// <item><term><see cref="BakePhase.Regressed"/></term><description>Refused</description></item>
+    /// <item><term><see cref="BakePhase.Regressed"/></term><description>Admitted — its Error stamps are released — unless <see cref="HoldsRollOnRegression"/>, then Refused</description></item>
     /// <item><term><see cref="BakePhase.Faulted"/></term><description>Admitted iff <see cref="AllowUnprovenBake"/>, else Refused</description></item>
     /// </list>
     ///
@@ -883,6 +915,15 @@ public static class NodeTypeBakeGateExtensions
     public const string AllowUnprovenBakeConfigKey = "PreWarm:AllowUnprovenBake";
 
     /// <summary>
+    /// Config key that brings back the retired contract: a measured regression refuses readiness and
+    /// mesh admission, so the rollout stalls with the previous image serving. Default: off — the pod
+    /// serves, and each type that does not compile on the image reads <c>CompilationStatus: Error</c>
+    /// on its record (maintainer, 2026-11-28). See
+    /// <see cref="NodeTypeBakeGateState.HoldsRollOnRegression"/>.
+    /// </summary>
+    public const string HoldRollOnRegressionConfigKey = "PreWarm:HoldRollOnRegression";
+
+    /// <summary>
     /// Registers the shared bake state. Safe and cheap to call unconditionally: the pre-warm hosted
     /// service writes to it whether or not anything gates on it, so the diagnostics are always there.
     ///
@@ -904,17 +945,24 @@ public static class NodeTypeBakeGateExtensions
     /// <param name="allowUnprovenBake">
     /// Operator override from <see cref="AllowUnprovenBakeConfigKey"/>: serve even when the sweep
     /// ERRORED and therefore proved nothing (<see cref="BakePhase.Faulted"/>). Defaults to
-    /// <c>false</c> — an unproven bake is not a passed bake. It never relaxes a real regression.
+    /// <c>false</c> — an unproven bake is not a passed bake.
+    /// </param>
+    /// <param name="holdRollOnRegression">
+    /// From <see cref="HoldRollOnRegressionConfigKey"/>: a measured regression refuses readiness and
+    /// admission. Defaults to <c>false</c> — the pod serves and the failing types are errored on their
+    /// records (<see cref="NodeTypeBakeGateState.HoldsRollOnRegression"/>).
     /// </param>
     public static IServiceCollection AddNodeTypeBakeGate(
         this IServiceCollection services,
         bool gatesReadiness = false,
-        bool allowUnprovenBake = false)
+        bool allowUnprovenBake = false,
+        bool holdRollOnRegression = false)
     {
         services.AddSingleton(new NodeTypeBakeGateState
         {
             GatesReadiness = gatesReadiness,
             AllowUnprovenBake = allowUnprovenBake,
+            HoldsRollOnRegression = holdRollOnRegression,
         });
         // 🚨 #3478 — the SAME verdict, now also gating MESH MEMBERSHIP and not merely traffic.
         // Registering the state as an IMeshAdmissionAuthority is what makes a refused pod inert

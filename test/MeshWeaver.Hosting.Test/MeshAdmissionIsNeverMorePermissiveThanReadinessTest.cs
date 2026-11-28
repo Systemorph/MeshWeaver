@@ -41,11 +41,12 @@ public class MeshAdmissionIsNeverMorePermissiveThanReadinessTest
         foreach (var phase in AllPhases)
             foreach (var gates in new[] { false, true })
                 foreach (var allowUnproven in new[] { false, true })
+                foreach (var holdRoll in new[] { false, true })
                 {
-                    var state = AtPhase(phase, gates, allowUnproven);
+                    var state = AtPhase(phase, gates, allowUnproven, holdRoll);
                     if (state.Admission is MeshAdmission.Admitted)
                         state.ReadinessGranted.Should().BeTrue(
-                            $"phase {phase} (gates={gates}, allowUnproven={allowUnproven}) admits "
+                            $"phase {phase} (gates={gates}, allowUnproven={allowUnproven}, holdRoll={holdRoll}) admits "
                             + "this process to the mesh, so a readiness probe must pass it — "
                             + "'not ready should NEVER run'");
                 }
@@ -100,6 +101,45 @@ public class MeshAdmissionIsNeverMorePermissiveThanReadinessTest
         state.Admission.Should().Be(expected);
         (state.Admission is MeshAdmission.Admitted).Should().Be(state.ReadinessGranted,
             "for a terminal phase the two verdicts are the same verdict");
+    }
+
+    /// <summary>
+    /// 🚨 <b>By default a regression errors the TYPE, not the image</b> (maintainer, 2026-11-28:
+    /// <i>"allow the update and error the code which does not compile. like this it's difficult to
+    /// even see what's happening"</i>). Without <c>PreWarm:HoldRollOnRegression</c> a Regressed pod
+    /// is ready AND admitted — so the Error stamps it held are released and each failing type's own
+    /// record shows its <c>CompilationError</c> — while the phase and the detail still name every
+    /// regressed type. Measured on pearl, 2026-11-27/28: three 4.x pods refused in turn on 7, 13 and
+    /// 24 types, a refused pod publishes nothing, and no record ever showed the failure.
+    /// </summary>
+    [Fact]
+    public void ByDefault_ARegressionIsReadyAndAdmitted_AndStillRecorded()
+    {
+        var state = AtPhase(BakePhase.Regressed, gatesReadiness: true, allowUnprovenBake: false,
+            holdRollOnRegression: false);
+
+        state.ReadinessGranted.Should().BeTrue("the roll is not held on a type's compile error");
+        state.Admission.Should().Be(MeshAdmission.Admitted,
+            "an admitted pod releases its held Error stamps, which is what makes the failure visible");
+        state.Phase.Should().Be(BakePhase.Regressed, "the regression is still recorded, never laundered");
+        state.Regressions.Keys.Should().Contain("Feedback/Feedback");
+    }
+
+    /// <summary>
+    /// The default is the registration's default: a host that passes nothing gets the non-holding
+    /// gate. Holding the roll is something an instance opts into.
+    /// </summary>
+    [Fact]
+    public void TheRegistrationDefault_DoesNotHoldTheRoll()
+    {
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddNodeTypeBakeGate(gatesReadiness: true);
+        using var sp = Microsoft.Extensions.DependencyInjection.ServiceCollectionContainerBuilderExtensions
+            .BuildServiceProvider(services);
+
+        Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+            .GetRequiredService<NodeTypeBakeGateState>(sp)
+            .HoldsRollOnRegression.Should().BeFalse();
     }
 
     // ── the gate itself ─────────────────────────────────────────────────────────────────────────
@@ -227,12 +267,13 @@ public class MeshAdmissionIsNeverMorePermissiveThanReadinessTest
     /// sweep does — never by setting a field, so the derivation under test is the production one.
     /// </summary>
     private static NodeTypeBakeGateState AtPhase(
-        BakePhase phase, bool gatesReadiness, bool allowUnprovenBake)
+        BakePhase phase, bool gatesReadiness, bool allowUnprovenBake, bool holdRollOnRegression = true)
     {
         var state = new NodeTypeBakeGateState
         {
             GatesReadiness = gatesReadiness,
             AllowUnprovenBake = allowUnprovenBake,
+            HoldsRollOnRegression = holdRollOnRegression,
         };
         switch (phase)
         {

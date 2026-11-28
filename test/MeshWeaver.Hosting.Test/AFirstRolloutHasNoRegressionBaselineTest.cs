@@ -100,7 +100,7 @@ public class AFirstRolloutHasNoRegressionBaselineTest(ITestOutputHelper output) 
     public void AFailureWithNoBaseline_DoesNotGate_AndIsNamed()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
         var watch = gate.MarkOutcome(new PreWarmOutcome(
@@ -132,7 +132,7 @@ public class AFirstRolloutHasNoRegressionBaselineTest(ITestOutputHelper output) 
         // LAST question asked, not the first. A timeout means the sweep never got an answer — that
         // is true whether or not anything was built here before — and filing it as "failed with no
         // working build to regress from" would report a failure that was never measured.
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
         var watch = gate.MarkOutcome(new PreWarmOutcome(
@@ -152,7 +152,7 @@ public class AFirstRolloutHasNoRegressionBaselineTest(ITestOutputHelper output) 
     public void OnAFirstBake_ARetirementIsStillNotAFailure()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
         gate.MarkOutcome(new PreWarmOutcome("Kmu/Basics", PreWarmStatus.Retired, "held for un-retyped instances")
@@ -176,7 +176,7 @@ public class AFirstRolloutHasNoRegressionBaselineTest(ITestOutputHelper output) 
         var report = Report(("Crm/Contact", BakeState.Baked), ("Crm/Mail", BakeState.NeverBuilt));
         report.Entries.Should().Contain(e => e.State == BakeState.Baked);
 
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
         var watch = gate.MarkOutcome(new PreWarmOutcome("Crm/Contact", PreWarmStatus.CompileError, "CS0246")
@@ -202,7 +202,7 @@ public class AFirstRolloutHasNoRegressionBaselineTest(ITestOutputHelper output) 
         DynamicTypePreWarmer.RegressionBaseline(report).Should().NotContain("Kmu/Abandoned",
             "PreviouslyBroken is the ONE state NodeTypeBakeEntry.WasHealthy excludes");
 
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
         gate.MarkOutcome(new PreWarmOutcome("Kmu/Abandoned", PreWarmStatus.CompileError, "CS0246")
@@ -300,7 +300,7 @@ public class AFirstRolloutHasNoRegressionBaselineTest(ITestOutputHelper output) 
         BuildProtocolDriver.IsGatingFailure(firstBake).Should().BeFalse(
             "there is no previous image to protect, so the GO may not be held either");
 
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
         gate.MarkOutcome(firstBake);
         gate.MarkComplete("baked");
@@ -312,7 +312,7 @@ public class AFirstRolloutHasNoRegressionBaselineTest(ITestOutputHelper output) 
         var established = firstBake with { HasRegressionBaseline = true };
         BuildProtocolDriver.IsGatingFailure(established).Should().BeTrue();
 
-        var strict = new NodeTypeBakeGateState { GatesReadiness = true };
+        var strict = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         strict.MarkRunning("enumerating dynamic NodeTypes");
         strict.MarkOutcome(established);
         strict.MarkComplete("baked");

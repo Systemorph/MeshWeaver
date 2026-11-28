@@ -26,7 +26,7 @@ namespace MeshWeaver.Hosting.Test;
 /// </summary>
 public class AServedBuildWitnessRecordsOnlyAnAdmittedBuildTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private readonly NodeTypeBakeGateState bake = new() { GatesReadiness = true };
+    private readonly NodeTypeBakeGateState bake = new() { GatesReadiness = true, HoldsRollOnRegression = true };
 
     private const string Build = "3.0.0-ci.9218";
 
