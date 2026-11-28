@@ -466,6 +466,52 @@ finishes. Two cases are pinned:
 - The negative control: a declined adoption (nothing recorded) must not flip while it is in flight,
   and the type must still be rebuilt for the live framework once the reservation clears.
 
+## A regression errors the type, not the image (2026-11-28)
+
+Since 2026-11-28 a measured regression no longer holds the roll by default. The maintainer's
+direction: *"we should probably allow the update and error the code which does not compile. like this
+it's difficult to even see what's happening"*.
+
+**What happened on pearl.** Pearl moved from the 3.x line to 4.\* on 2026-11-27 and could not finish
+a single roll. Each 4.x pod applied cleanly, then refused readiness on `nodetype_bake`:
+
+| Pod | Image | Refused on |
+|---|---|---|
+| `6944d677d4-46szb` | 4.0.14338 | 7 types (Edu, Feedback, MyAi, Providers), booted before the AI modules reached the 4.x line |
+| `74b66f59ff-bdrfz` | 4.0.14338, after a restart | `Publish/Deck`, `Publish/Slide`, plus 11 with no baseline |
+| `66c96db56-jn8dp` | 4.0.14377 | 24 types, starting `Approvals/Elsewhere, Collaboration/Review, DataModel…` |
+
+The 3.x replicas kept serving, so there was no outage. But nothing anyone could read showed what was
+broken:
+
+- **The records stayed `Ok`.** A refused pod is not admitted ([Mesh Admission](../MeshAdmission)), so
+  its Error stamps are discarded. Every type's record kept the 3.x replicas' `CompilationStatus: Ok`.
+- **The pod log was the only evidence, and it was buried.** The probe line repeats every few seconds.
+  A Loki filter for `error CS|Compilation failed` on the refused pod returned nothing but probe lines.
+- **One package held the platform.** Any single type in any package held the whole instance on the
+  old line, which is what policy `platform-rolls-independently-of-packages` rules out.
+
+**The rule now.**
+
+- `NodeTypeBakeGateState.ReadinessGranted` grants `Regressed` unless the host set
+  `PreWarm:HoldRollOnRegression=true` (`HoldsRollOnRegression`). `Admission` is derived from that
+  predicate, so the pod is also **admitted**.
+- An admitted pod releases the Error stamps it held. Each type that does not compile on the image
+  reads `CompilationStatus: Error` with its `CompilationError` on its own node, where its owner can see
+  it. The platform recompiles it once its sources change, exactly as before.
+- **The regression is still recorded.** The phase stays `Regressed`, the detail names every type, and
+  the sweep logs `SERVING WITH ERRORED NodeTypes …` once at error level.
+- The host check (`NodeTypeBakeHealthCheck`, MeshWeaver.Plugins) answers **Healthy** with the errored
+  types in its description. It does not answer Degraded, because the gate's verdicts stay Healthy and
+  Unhealthy only.
+
+**What did not change.**
+
+- `Faulted` (an unproven bake, or an adopt-only boot with missing CI bundles) keeps its own rules:
+  `PreWarm:AllowUnprovenBake` and the served-build witness.
+- An instance that wants the old stall sets `PreWarm:HoldRollOnRegression=true`. It then refuses
+  readiness and admission on a regression exactly as before.
+
 ## What this does not cover
 
 - **A `Faulted` sweep on an image that has NOT served here still refuses readiness** unless

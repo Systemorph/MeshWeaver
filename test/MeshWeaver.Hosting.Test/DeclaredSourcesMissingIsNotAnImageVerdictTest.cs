@@ -123,7 +123,7 @@ public class DeclaredSourcesMissingIsNotAnImageVerdictTest
     public void ADeclaredSourcesMissingOutcome_DoesNotGate_AndIsNamed()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
         var watch = gate.MarkOutcome(new PreWarmOutcome(
@@ -150,7 +150,7 @@ public class DeclaredSourcesMissingIsNotAnImageVerdictTest
     public void ACompileErrorOnAHealthyType_StillRefusesReadiness()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
         gate.MarkOutcome(new PreWarmOutcome(TypePath, PreWarmStatus.CompileError, "CS0246")

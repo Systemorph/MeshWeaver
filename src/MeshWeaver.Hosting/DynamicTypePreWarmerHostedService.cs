@@ -854,7 +854,17 @@ public sealed class DynamicTypePreWarmerHostedService(
                     if (gate is { Phase: BakePhase.Regressed })
                     {
                         var regressions = string.Join(" | ", gate.Regressions.Select(r => $"{r.Key} → {r.Value}"));
-                        if (gate.GatesReadiness)
+                        if (gate is { GatesReadiness: true, ReadinessGranted: true })
+                            logger.LogError(
+                                "DynamicTypePreWarmer: SERVING WITH ERRORED NodeTypes — {Detail}. This "
+                                + "image is admitted and each of these types is recorded as "
+                                + "CompilationStatus Error with its CompilationError on its own node "
+                                + "(the roll is not held: '{Key}' is off). Fix the type's source or "
+                                + "its package; the platform recompiles it once its sources change. "
+                                + "Regressions: {Regressions}",
+                                gate.Detail, NodeTypeBakeGateExtensions.HoldRollOnRegressionConfigKey,
+                                regressions);
+                        else if (gate.GatesReadiness)
                             logger.LogCritical(
                                 "DynamicTypePreWarmer: REFUSING READINESS — {Detail}. The rollout will stall "
                                 + "with the previous image still serving. Each of these types is now being "
