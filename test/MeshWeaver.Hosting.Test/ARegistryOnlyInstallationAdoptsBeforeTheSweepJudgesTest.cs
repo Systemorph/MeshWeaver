@@ -75,7 +75,7 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
             {
                 services.AddGitHubSyncServices();
                 // The portal's wiring: the gate is ARMED (a readiness probe consumes it).
-                services.AddNodeTypeBakeGate(gatesReadiness: true);
+                services.AddNodeTypeBakeGate(gatesReadiness: true, holdRollOnRegression: true);
                 services.AddSingleton(new PluginCatalogOptions
                 {
                     InstallPreInstalledPackages = false,

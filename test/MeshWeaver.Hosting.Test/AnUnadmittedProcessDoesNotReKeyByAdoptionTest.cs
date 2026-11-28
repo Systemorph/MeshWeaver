@@ -48,7 +48,7 @@ public class AnUnadmittedProcessDoesNotReKeyByAdoptionTest(ITestOutputHelper out
     private readonly string suffix = Guid.NewGuid().ToString("N")[..8];
 
     /// <summary>The bake gate this process runs with — reassigned per arm, read live.</summary>
-    private NodeTypeBakeGateState bake = new() { GatesReadiness = true };
+    private NodeTypeBakeGateState bake = new() { GatesReadiness = true, HoldsRollOnRegression = true };
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)

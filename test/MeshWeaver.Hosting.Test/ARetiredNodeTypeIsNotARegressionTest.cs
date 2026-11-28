@@ -55,7 +55,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
     public void ARetiredOutcome_OnAHealthyType_DoesNotGate_AndIsNamed(PreWarmStatus status)
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
         var watch = gate.MarkOutcome(new PreWarmOutcome("Crm/Mail", status, "retired by Crm")
@@ -80,7 +80,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         // The negative control: the classification changed, the gate did not.
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
         var watch = gate.MarkOutcome(new PreWarmOutcome("Crm/Contact", PreWarmStatus.CompileError, "CS0246")
@@ -98,7 +98,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
     public void AStandingRegression_WhoseNodeWasRemoved_IsWithdrawn_NotRecovered()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true, HoldsRollOnRegression = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
         gate.MarkOutcome(new PreWarmOutcome("Crm/Mail", PreWarmStatus.CompileError, "No node found at 'Crm/Mail'")
         {
