@@ -186,6 +186,65 @@ public sealed record ComboVerification
     [JsonIgnore]
     public ImmutableList<ModuleVerification> FailedModules =>
         [.. Modules.Where(m => m.Outcome == ModuleVerificationOutcome.Failed)];
+
+    /// <summary>Largest text, in characters, one failure or caveat line carries to the instance
+    /// (the "cut" note included).</summary>
+    public const int MaxLineLength = 2000;
+
+    /// <summary>Most failure lines one module (and most caveats the verdict) carries to the instance.</summary>
+    public const int MaxLinesPerList = 100;
+
+    /// <summary>Largest serialized verdict, in characters, that is sent to the landing route.</summary>
+    public const int MaxLandedSize = 1_000_000;
+
+    private static readonly (int Lines, int Length)[] BoundTiers =
+        [(MaxLinesPerList, MaxLineLength), (20, 500), (5, 200), (1, 120)];
+
+    /// <summary>
+    /// This verdict bounded for LANDING (MeshWeaver#4413). The gate's per-check diagnostics are
+    /// unbounded text (a Red slot printed 391,424 lines), and the instance's landing route refuses
+    /// an oversized body with HTTP 413 — so the verdict that said the candidate was Red was itself
+    /// never recorded. Every list is cut to at most <see cref="MaxLinesPerList"/> lines of
+    /// <see cref="MaxLineLength"/> characters, and the cut SAYS how much it dropped. Because a combo
+    /// with many modules multiplies that, the whole verdict is also held under
+    /// <see cref="MaxLandedSize"/>: the per-list limits tighten tier by tier until it fits. Kind,
+    /// outcomes and the module set are never touched.
+    /// </summary>
+    public ComboVerification BoundedForLanding()
+    {
+        var bounded = this;
+        foreach (var (lines, length) in BoundTiers)
+        {
+            bounded = this with
+            {
+                Caveats = Bound(Caveats, lines, length),
+                Modules = [.. Modules.Select(m => m with
+                {
+                    Failures = Bound(m.Failures, lines, length),
+                    KnownDebt = Bound(m.KnownDebt, lines, length),
+                })],
+            };
+            if (System.Text.Json.JsonSerializer.Serialize(bounded).Length <= MaxLandedSize)
+                break;
+        }
+        return bounded;
+    }
+
+    private static ImmutableList<string> Bound(ImmutableList<string> lines, int maxLines, int maxLength)
+    {
+        var kept = lines.Take(maxLines).Select(l => CutLine(l, maxLength)).ToList();
+        if (lines.Count > maxLines)
+            kept.Add(CutLine($"… [{lines.Count - maxLines} more line(s) cut to keep the verdict landable]", maxLength));
+        return [.. kept];
+    }
+
+    private static string CutLine(string line, int maxLength)
+    {
+        if (line.Length <= maxLength)
+            return line;
+        var note = $" … [{line.Length} chars, cut]";
+        return line[..Math.Max(0, maxLength - note.Length)] + note;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
