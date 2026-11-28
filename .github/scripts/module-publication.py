@@ -1120,14 +1120,15 @@ def publish(a: argparse.Namespace) -> int:
         if a.dry_run:
             published.append(item)
             continue
+        # `data` is an in-memory bytes payload, so every re-ask sends the identical body.
         req = urllib.request.Request(url, data=item["path"].read_bytes(), method="POST", headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/octet-stream",
         })
-        started = time.monotonic()
         outcome: str | None = None   # a refusal to report, or None on a 2xx
         for attempt, delay in enumerate((*RETRY_DELAYS_S, None), start=1):
             retryable = False
+            started = time.monotonic()   # per ATTEMPT: the printed time is the registry's, not the backoff's
             try:
                 with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
                     body = resp.read(4096).decode("utf-8", "replace")

@@ -373,27 +373,32 @@ def main() -> int:  # noqa: C901
 
             print("\n== A 5xx from one replica is re-asked; a 4xx never is")
             os.environ["MW_PUBLISH_RETRY_DELAYS"] = "0,0"
-            for code, expect_asks, why in ((500, 3, "a 500 is re-asked on the whole schedule and then reds"),
-                                           (409, 1, "a 409 is the registry's answer and is asked once")):
-                flaky = Registry(status=code)
-                try:
-                    r = do_publish(REGISTRY=flaky.url)
-                    check(f"{why} (asked {len(flaky.requests)}x)",
-                          r.returncode == 1 and len(flaky.requests) == expect_asks, r.stdout + r.stderr)
-                    if code == 500:
-                        check("…and names how many attempts it took", "after 3 attempts" in (r.stdout + r.stderr),
-                              r.stdout + r.stderr)
-                finally:
-                    flaky.close()
-            seq = Registry(status=500)
-            seq.fail_first = 1   # the first answer is a 500, the next a 200: the second replica took it
             try:
-                r = do_publish(REGISTRY=seq.url)
-                check("a 500 then a 200 PUBLISHES (the other replica took it) — green, asked twice",
-                      r.returncode == 0 and len(seq.requests) == 2, r.stdout + r.stderr)
+                for code, expect_asks, why in ((500, 3, "a 500 is re-asked on the whole schedule and then reds"),
+                                               (409, 1, "a 409 is the registry's answer and is asked once")):
+                    flaky = Registry(status=code)
+                    try:
+                        r = do_publish(REGISTRY=flaky.url)
+                        check(f"{why} (asked {len(flaky.requests)}x)",
+                              r.returncode == 1 and len(flaky.requests) == expect_asks, r.stdout + r.stderr)
+                        if code == 500:
+                            check("…and names how many attempts it took", "after 3 attempts" in (r.stdout + r.stderr),
+                                  r.stdout + r.stderr)
+                    finally:
+                        flaky.close()
+                seq = Registry(status=500)
+                seq.fail_first = 1   # the first answer is a 500, the next a 200: the second replica took it
+                try:
+                    r = do_publish(REGISTRY=seq.url)
+                    check("a 500 then a 200 PUBLISHES (the other replica took it) — green, asked twice",
+                          r.returncode == 0 and len(seq.requests) == 2, r.stdout + r.stderr)
+                    check("…and the re-ask carries the identical, non-empty body",
+                          len(seq.requests) == 2 and bool(seq.requests[0]["body"])
+                          and seq.requests[0]["body"] == seq.requests[1]["body"])
+                finally:
+                    seq.close()
             finally:
-                seq.close()
-            os.environ.pop("MW_PUBLISH_RETRY_DELAYS", None)
+                os.environ.pop("MW_PUBLISH_RETRY_DELAYS", None)
 
             print("\n== MUTATIONS of the caller's graph (the half the runtime verdict cannot see)")
             caller_dir = ws / "caller" / ".github" / "workflows"
