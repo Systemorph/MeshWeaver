@@ -129,6 +129,33 @@ public static class WebhookInbox
     /// <see cref="AcceptedEventsName"/>.</summary>
     public const string GitHubEventHeader = "X-GitHub-Event";
 
+    /// <summary>The header GitHub stamps with the delivery's GUID — the same on a redelivery of it.</summary>
+    public const string GitHubDeliveryHeader = "X-GitHub-Delivery";
+
+    /// <summary>A create refused because the inbox node is already stored — typed first, the message as the fallback.</summary>
+    private static bool IsAlreadyExists(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e.Data[NodeCreationFailure.RejectionReasonKey] is NodeCreationRejectionReason.NodeAlreadyExists)
+                return true;
+            if (e.Message?.StartsWith("Node already exists", StringComparison.Ordinal) == true)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The inbox id a VERIFIED delivery is stored under: GitHub's own delivery GUID (<see cref="GitHubDeliveryHeader"/>)
+    /// in <c>N</c> form, so a redelivery of a delivery that WAS stored — and answered late, which GitHub records as
+    /// a failure — lands on the same node instead of a second one. Null when the delivery carries no parseable GUID
+    /// (a sender that is not GitHub), which then gets a fresh id as before. Pure.
+    /// </summary>
+    internal static string? DeliveryIdOf(IReadOnlyDictionary<string, string> headers) =>
+        headers.TryGetValue(GitHubDeliveryHeader, out var raw) && Guid.TryParse(raw?.Trim(), out var guid)
+            ? guid.ToString("N")
+            : null;
+
     /// <summary>The GitHub-style signature header verified for targets that declare a secret:
     /// <c>sha256=&lt;lowercase hex&gt;</c> of HMAC-SHA256 over the raw body.</summary>
     public const string SignatureHeader = "X-Hub-Signature-256";
@@ -569,7 +596,10 @@ public static class WebhookInbox
                                 IgnoredEvent = ignoredEvent,
                             });
                         }
-                        var id = Guid.NewGuid().ToString("N");
+                        // 🚨 Keyed by the delivery GUID only once the signature VERIFIED: an unsigned sender could
+                        // otherwise claim an id a later, genuine delivery would then be answered as a duplicate of.
+                        var deliveryId = signatureVerified ? DeliveryIdOf(kept) : null;
+                        var id = deliveryId ?? Guid.NewGuid().ToString("N");
                         var node = new MeshNode(id, $"{normalized}/{InboxContainer}")
                         {
                             Name = $"Webhook {id}",
@@ -599,7 +629,16 @@ public static class WebhookInbox
                             {
                                 SignatureVerified = signatureVerified,
                                 SenderKey = senderKey,
-                            });
+                            })
+                            // A redelivery of a delivery already stored: the sender needs the answer it missed, and
+                            // nothing is written twice (a replay sweep is safe because of this).
+                            .Catch((Exception ex) => deliveryId is not null && IsAlreadyExists(ex)
+                                ? Observable.Return(new DeliveryResult(DeliveryStatus.Accepted, node.Path)
+                                {
+                                    SignatureVerified = signatureVerified,
+                                    SenderKey = senderKey,
+                                })
+                                : Observable.Throw<DeliveryResult>(ex));
                     }));
     }
 
