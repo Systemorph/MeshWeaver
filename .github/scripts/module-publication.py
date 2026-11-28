@@ -139,6 +139,16 @@ _SKIP_TOLERANT_RE = re.compile(
 #: the caller answer the verdict question with a value it chose rather than one GitHub computed.
 VERDICTS_EXPR = "${{ toJSON(needs) }}"
 HTTP_TIMEOUT_S = 300
+#: 🚨 A SERVER-SIDE fault (5xx) or a transport failure on the hand-over is re-asked on a bounded
+#: schedule — the registry sits behind a load balancer over several replicas, and one replica's own
+#: storage fault is not the registry's verdict. MEASURED 2026-11-28: Plugins run 46124004180 was refused
+#: `HTTP 500 … Access to the path '/data/lines/4/modules/activation.d/MeshWeaver.Proton.json' is
+#: denied` by ONE replica (the registry's own body says "an infrastructure fault on the replica that
+#: answered, not a conflict with this upload") and the re-run of the same job went through at once.
+#: A hand-over is idempotent (keyed by `{package}@{version}`), so re-asking cannot double-publish. A 4xx
+#: (a 409 same-identity refusal, a 401) is the registry's ANSWER and is never re-asked. When the
+#: schedule is spent the refusal is reported with how many attempts it took. Overridable for tests.
+RETRY_DELAYS_S = tuple(int(x) for x in os.environ.get("MW_PUBLISH_RETRY_DELAYS", "5,20,60").split(",") if x != "")
 PUBLISH_TOKEN_ENV = "MW_PUBLISH_TOKEN"
 
 
@@ -1110,24 +1120,40 @@ def publish(a: argparse.Namespace) -> int:
         if a.dry_run:
             published.append(item)
             continue
+        # `data` is an in-memory bytes payload, so every re-ask sends the identical body.
         req = urllib.request.Request(url, data=item["path"].read_bytes(), method="POST", headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/octet-stream",
         })
-        started = time.monotonic()
-        try:
-            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
-                body = resp.read(4096).decode("utf-8", "replace")
-                # The time each answer took is printed, so a slow registry is read off the log per
-                # bundle instead of being inferred from when the runner happened to receive a burst.
-                print(f"     registry answered {resp.status} in {time.monotonic() - started:.1f} s: {body}")
-        except urllib.error.HTTPError as exc:
-            body = exc.read(4096).decode("utf-8", "replace")
-            failed.append(f"registry refused `{item['module']}@{item['version']}` (HTTP "
-                          f"{exc.code}): {body}")
-            continue
-        except Exception as exc:  # noqa: BLE001 — a transport failure is a refusal, never a pass
-            failed.append(f"could not reach the registry for `{item['module']}@{item['version']}`: {exc}")
+        outcome: str | None = None   # a refusal to report, or None on a 2xx
+        for attempt, delay in enumerate((*RETRY_DELAYS_S, None), start=1):
+            retryable = False
+            started = time.monotonic()   # per ATTEMPT: the printed time is the registry's, not the backoff's
+            try:
+                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
+                    body = resp.read(4096).decode("utf-8", "replace")
+                    # The time each answer took is printed, so a slow registry is read off the log per
+                    # bundle instead of being inferred from when the runner happened to receive a burst.
+                    print(f"     registry answered {resp.status} in {time.monotonic() - started:.1f} s: {body}")
+                outcome = None
+                break
+            except urllib.error.HTTPError as exc:
+                body = exc.read(4096).decode("utf-8", "replace")
+                outcome = (f"registry refused `{item['module']}@{item['version']}` (HTTP "
+                           f"{exc.code}): {body}")
+                retryable = 500 <= exc.code < 600
+            except Exception as exc:  # noqa: BLE001 — a transport failure is a refusal, never a pass
+                outcome = f"could not reach the registry for `{item['module']}@{item['version']}`: {exc}"
+                retryable = True
+            if not retryable or delay is None:
+                if attempt > 1:
+                    outcome += f" (after {attempt} attempts)"
+                break
+            print(_inert(f"     {outcome} — attempt {attempt}/{len(RETRY_DELAYS_S) + 1}; re-asking in {delay}s"),
+                  file=sys.stderr)
+            time.sleep(delay)
+        if outcome is not None:
+            failed.append(outcome)
             continue
         published.append(item)
         # 🚨 AFTER the 2xx, never before: a staged artifact is not a Published ledger record, and a
