@@ -962,10 +962,15 @@ def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
     if verdict.action == "close":
         assert verdict.issue is not None
         _owned(gh, label, title, verdict.issue)          # re-proven at the moment of the write
-        gh.comment(verdict.issue, f"green again: {run.run_url}\n\n"
-                                  f"Commit `{run.sha}`, trigger `{run.trigger}`. Closing; a red within "
-                                  f"{reopen_window_days} days reopens this issue rather than filing a new one.")
+        # Close FIRST and read the answer: a comment that says "Closing" must never precede a close that
+        # did not happen, and a PATCH that returns 200 with the issue still open is a failed close.
         issue = gh.update_issue(verdict.issue, state="closed", state_reason="completed")
+        if issue.state != "closed":
+            raise Red(f"closing #{verdict.issue} did not take: GitHub answered the PATCH with state "
+                      f"{issue.state!r}. Nothing was announced; the ledger is still open.")
+        gh.comment(verdict.issue, f"green again: {run.run_url}\n\n"
+                                  f"Commit `{run.sha}`, trigger `{run.trigger}`. Closed; a red within "
+                                  f"{reopen_window_days} days reopens this issue rather than filing a new one.")
         return issue, event_body("ci-green", run, issue)
     gh.ensure_label(label)
     if verdict.action == "create":
@@ -1359,6 +1364,21 @@ def self_test() -> int:
     check("green comment says `green again: <run URL>`",
           any(n == issue.number and c.startswith("green again: https://github.com/o/r/actions/runs/555") for n, c in gh.comments))
     check("ci-green event is posted", json.loads(body3 or "{}").get("event") == "ci-green")
+
+    # 3b. a close that GitHub answers with the issue still open is RED and announces nothing
+    class _NoCloseFake(_Fake):
+        def update_issue(self, number, **fields):
+            self.writes += 1
+            return self.issues[number]          # state unchanged: the close did not take
+    gh_nc = _NoCloseFake()
+    go(gh_nc, run("failure", [job]))
+    try:
+        go(gh_nc, run("success"))
+        check("close that did not take -> Red", False)
+    except Red:
+        check("close that did not take -> Red", True)
+    check("failed close posts no 'green again' comment",
+          not any(c.startswith("green again:") for _, c in gh_nc.comments))
 
     # 4. green with no open issue → no-op, no write, no event
     gh4 = _Fake()
