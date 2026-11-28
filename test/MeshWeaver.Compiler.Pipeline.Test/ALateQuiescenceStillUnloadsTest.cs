@@ -57,7 +57,7 @@ public sealed class ALateQuiescenceStillUnloadsTest : IDisposable
         var unloading = new AsyncSubject<Unit>();
 
         var released = HoldTheLeaseAcrossTheBudgetThenRelease(contexts, unloading, log, unloads);
-        await released.Timeout(Wait).Await(ct);
+        await released.Await(ct);
 
         await unloading.Should().Within(Wait).Emit(
             "the release of the last lease drives the unload, however late it comes", cancellationToken: ct);
@@ -143,8 +143,18 @@ public sealed class ALateQuiescenceStillUnloadsTest : IDisposable
                     released.OnError(e);
                 }
             },
-            released.OnError);
-        return released;
+            e =>
+            {
+                lease.Dispose();
+                released.OnError(e);
+            },
+            () =>
+            {
+                lease.Dispose();
+                released.OnCompleted();
+            });
+        // Whatever ends the wait (timeout, fault, cancellation), the lease and this subscription end with it.
+        return released.Timeout(Wait).Finally(lease.Dispose);
     }
 
     // Not inlined, so no frame of the test roots the retired generation's context or assembly.
