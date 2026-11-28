@@ -364,7 +364,7 @@ public sealed record ImportConflictPolicy(
     /// as "newer than the last sync" whenever the sync horizon could not advance (it is held while
     /// ANY node is preserved). Judged by timestamp alone, the previous import's writes were then
     /// preserved from the prune, so a file the repo DELETED could never leave the mesh: measured on
-    /// memex.systemorph.com 2026-09-08 — three <c>Crm/Source/Mail*</c> files retired by Crm#54 on
+    /// memex.systemorph.com 2026-09-08 — three <c>Crm/Source/Mail*</c> files retired by a commit on
     /// 09-06 were still compiled into every Crm type two days later, and no bake of the repository
     /// could ever match the instance's sources again. Pure.
     /// </summary>

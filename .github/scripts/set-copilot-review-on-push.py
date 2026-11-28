@@ -54,7 +54,7 @@ import sys
 import tempfile
 
 OWNER = "Systemorph"
-FLEET = ("MeshWeaver", "MeshWeaver.Plugins", "Memex", "MeshWeaver.Crm", "MeshWeaver.Education",
+FLEET = ("MeshWeaver", "MeshWeaver.Plugins", "Memex", "MeshWeaver.Education",
          "MeshWeaver.Reinsurance", "MeshWeaver.SocialMedia", "MeshWeaver.Manufacturing", "MeshWeaver.FundReporting",
          "MeshWeaver.Deploy")
 RULE = "copilot_code_review"

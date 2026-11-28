@@ -33,7 +33,7 @@ alongside the compile check. The mesh CI gate still EXECUTES the `Tests` layout 
 instance — this is the fast local loop, not a replacement for it.
 
 🚨 THIS IS THE CANONICAL, AND IT IS THE ONLY COPY (MeshWeaver#4785). It lived as three vendored
-copies — MeshWeaver.Crm, MeshWeaver.Reinsurance, MeshWeaver.Plugins — with nothing in core to
+copies — MeshWeaver.Reinsurance, MeshWeaver.Plugins and a third satellite — with nothing in core to
 compare them against, and `compile-check.py`, which they all import, is fetched at a moving ref. So
 when core #4711 replaced the compile model and removed `usings_union`, all three broke at once and
 differently, and no CI lane anywhere was red: Reinsurance's died with `AttributeError` before a
@@ -438,7 +438,7 @@ def declarations(text: str) -> set[tuple[frozenset[str], str]]:
     #4916). The regex allows arbitrary leading whitespace, so a NESTED `public sealed class FieldRow`
     used by two different outer types in two files read as ONE top-level type declared twice, and the
     harness then REFUSED a set the gate compiles: measured over every NodeType with resolved sources
-    in MeshWeaver.Reinsurance, MeshWeaver.Crm and MeshWeaver.Plugins, **10 of 243** were refused for
+    in MeshWeaver.Reinsurance, MeshWeaver.Plugins and the CRM, **10 of 243** were refused for
     exactly that, all in Plugins — `Edu/CourseCatalog`, `Edu/CourseInvite`, `Governance/Activity`,
     `Hosting/{Backup,Deployment,FleetConsole,InstanceAction,InstanceRequest,PlatformBuildInbox}`,
     `Store/Maintenance` — so ten NodeTypes' suites could not be run locally at all. That is the
@@ -613,7 +613,7 @@ def unit_for(cc, sources):
     hands `build_unit` the resolved frozenset of PATHS. Two DISTINCT paths with identical content
     therefore compile once here and twice there — CS0101 on the gate and on the mesh, silent here.
     Measured 2026-09-19 over every NodeType with resolved sources in MeshWeaver.Reinsurance,
-    MeshWeaver.Crm and MeshWeaver.Plugins: **0 of 243** exercise it, so it is latent, and left as it
+    the CRM and MeshWeaver.Plugins: **0 of 243** exercise it, so it is latent, and left as it
     is rather than changed with no subject to measure the change against. If you ever see the gate
     report a CS0101 this harness does not, that is where to look first."""
     text, origins, _imports = cc.build_unit(sources, None)

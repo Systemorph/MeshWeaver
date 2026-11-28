@@ -44,7 +44,6 @@ Measured 2026-09-06 while staging the coordinated platform-pin move for the 3.0.
 | MeshWeaver.Reinsurance | `scripts/check-platform-pins.py` | 12 |
 | **MeshWeaver.SocialMedia** | **none** | 4 |
 | **MeshWeaver.Manufacturing** | **none** | 3 |
-| **MeshWeaver.Crm** | **none** | 4 |
 
 🚨 **Zero matches in the bottom three is not a gate that skips — it is a gate that does not exist,
 so there is nothing to notice.** The fleet's usual failure mode is a *skipped* gate wearing a
@@ -152,7 +151,7 @@ allow-files). There is no fallback: a ref the script cannot be fetched at fails 
 ## What the satellite lane actually looks like, and how the three repos differ
 
 The three repositories #3454 named adopted the gate on 2026-09-06/07 —
-MeshWeaver.SocialMedia#141, MeshWeaver.Manufacturing#58, MeshWeaver.Crm#58 — each as one job in
+MeshWeaver.SocialMedia#141, MeshWeaver.Manufacturing#58 and a third — each as one job in
 its own `ci.yml`:
 
 ```yaml
@@ -251,7 +250,6 @@ a placeholder substituted for the tester pin, is why the exercise matters:
 ```
 MeshWeaver.Manufacturing   placeholder tester pin   RED  ✅
 MeshWeaver.SocialMedia     placeholder tester pin   GREEN ❌
-MeshWeaver.Crm             placeholder tester pin   GREEN ❌
 ```
 
 Manufacturing writes its tester pin as an `env:` key; SocialMedia and Crm write theirs into a

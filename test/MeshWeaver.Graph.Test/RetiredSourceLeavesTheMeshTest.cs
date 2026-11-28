@@ -19,7 +19,7 @@ namespace MeshWeaver.Graph.Test;
 /// 🚨 <b>Issue #3589 — a file the repository RETIRED stayed in the mesh, compiled, for ever.</b>
 ///
 /// <para><b>Measured on memex.systemorph.com, 2026-09-07/08.</b> Three <c>Crm/Source/Mail*</c> code
-/// nodes deleted from <c>MeshWeaver.Crm</c> on 09-06 were still in the partition — and still compiled
+/// nodes deleted from the CRM's repository on 09-06 were still in the partition — and still compiled
 /// into every Crm type — two days later, and <c>Edu/Course</c> had been deleted upstream for
 /// <b>53 days</b>. Six retired nodes across two of the portal's fourteen synced partitions; two of
 /// them parked at <c>compilationStatus: Error</c> and still being recompiled every boot. Because the

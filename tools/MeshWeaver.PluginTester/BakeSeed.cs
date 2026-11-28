@@ -279,7 +279,7 @@ public sealed class BakeSeedConsumer(
         // question a shortfall raises is answered in the verdict itself. That matters because the
         // per-assembly reason it deferred to is logged at Information and THE GATE MESH RUNS AT
         // WARNING — the pointer led to lines the gate never writes, which is why a 1-of-87
-        // shortfall was undiagnosable from a CI log (MeshWeaver.Crm main, red from 2026-08-28
+        // shortfall was undiagnosable from a CI log (the CRM's main, red from 2026-08-28
         // 21:54 for ~12 h with every per-type verdict green). A verdict carries its own evidence.
         return $"the gate adopted {expected.Intersect(covered).Count} of {expected.Count} baked "
             + "assembly(ies) for the types "

@@ -1105,7 +1105,7 @@ def self_test() -> int:
     d = decide(with_(stages_file=os.path.join(tmp, "absent.json")), host_q, ok_post, route("MeshWeaver.Plugins"))
     check("forced/a repository with NO stages is host-forced too, owing everything, and queues nothing",
           d.executor == HOST_FORCED and "no host stages" in d.why and [c[0] for c in calls] == ["GET"], (d, calls))
-    d = decide(with_(stages_file=owing), host_q, ok_post, route("MeshWeaver.Crm"))
+    d = decide(with_(stages_file=owing), host_q, ok_post, route("MeshWeaver.Education"))
     check("forced/negative control: a repository NOT on the list stays on actions", d.executor == ACTIONS, d)
     d = decide(with_(stages_file=owing), get_answer(200, {"executor": "actions"}), ok_post, route("MeshWeaver.Plugins"))
     check("forced/the instance must still say host (HostRepos) — else actions", d.executor == ACTIONS, d)
@@ -1123,7 +1123,7 @@ def self_test() -> int:
     d = decide(with_(stages_file=owing), host_q, ok_post, route("MeshWeaver.Plugins"), route_only=True)
     check("forced/route-only on a forced, owing repository is host-forced and POSTs nothing", d.executor == HOST_FORCED and not any(c[0] == "POST" for c in calls), (d, calls))
     check("forced/route-only prints the debt as warnings, never an error", d.lines and not any(l.startswith("::error") for l in d.lines), d.lines)
-    d = decide(with_(stages_file=stages), host_q, ok_post, route("MeshWeaver.Crm"), route_only=True)
+    d = decide(with_(stages_file=stages), host_q, ok_post, route("MeshWeaver.Education"), route_only=True)
     check("forced/route-only on an unlisted repository is actions", d.executor == ACTIONS, d)
     # 5b'. PER-STAGE EQUIVALENCE (policy per-stage-ci-equivalence): a declared, evidenced stage of a host-forced
     # repository carries the host's verdict; every other stage stays in shadow. All fakes — no network.
@@ -1198,7 +1198,7 @@ def self_test() -> int:
     d = decide(L(), served_q, ok_post, route_eq({"MeshWeaver.Plugins": {"portal-hosts": proven}}))
     check("stage/a declaration for a stage the repository does not declare is ignored, said",
           all(v == HOST_FORCED for v in d.stages.values()) and any("does not declare" in l for l in d.lines), (d.stages, d.lines))
-    d = decide(L(), served_q, ok_post, route_eq({"MeshWeaver.Crm": {"compile-check": proven}}))
+    d = decide(L(), served_q, ok_post, route_eq({"MeshWeaver.Education": {"compile-check": proven}}))
     check("stage/NEGATIVE: another repository's declaration routes nothing here", d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED}, d.stages)
     d = decide(L(), served_q, post_answer(202, {"signature": "unsigned"}), route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}))
     check("stage/NEGATIVE: a run the host never verifiably received carries NO host stage (its context would wait on nothing)",

@@ -2919,7 +2919,7 @@ jobs:
 
     # …and the lane hands that script the set NAME a pinned caller already resolved. Without it a
     # shard cannot wait out a set the runner volume has not installed YET, and refuses it at once —
-    # which every satellite run hits when it resolves a set sealed minutes earlier (Crm#108, 09-15).
+    # which every satellite run hits when it resolves a set sealed minutes earlier (measured 2026-09-15).
     # Reads node-repo-gate.yml and EXECUTES its plan/shard steps on the pinned path.
     - name: "The gate lane carries a pinned caller's set name to the volume lookup"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
@@ -3161,7 +3161,7 @@ jobs:
     # file with a second `with:` parses, every shape check passes, the job runs, and it uses a value
     # the diff never shows. Measured 2026-09-07 (#3579): a patcher adopting #3560's
     # `centralized-gen-manifests` input appended a SECOND `with:` to the `validate:` job in
-    # MeshWeaver.Education and MeshWeaver.Crm; the `uses:` sha had moved to the new lane and the
+    # MeshWeaver.Education and one more satellite; the `uses:` sha had moved to the new lane and the
     # effective `platform-ref` was still the old one, so the lane would have fetched its central
     # guard scripts — and the canonical gen-manifests.py — at the OLD ref. Nothing detected it; it
     # was caught by reading the rendered block. `check-pin-set-consistency.py` models only the
