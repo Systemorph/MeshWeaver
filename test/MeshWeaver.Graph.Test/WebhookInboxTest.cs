@@ -274,6 +274,44 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         second.NodePath.Should().NotBe(first.NodePath);
     }
 
+    /// <summary>
+    /// A verified delivery is stored under GitHub's delivery GUID, so a REDELIVERY of one that was stored (and
+    /// answered after GitHub's 10 s, which GitHub records as a failure) is answered Accepted at the same node and
+    /// writes nothing twice. An UNSIGNED sender cannot claim an id, and a header that is no GUID falls back to a fresh id.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ARedeliveredVerifiedDelivery_LandsOnTheSameNode_AndIsNotWrittenTwice()
+    {
+        await CreateTarget("Redelivered", TestContext.Current.CancellationToken);
+        var guid = "082fa414-eb27-11f1-9490-2057ff95e683";
+        KeyValuePair<string, string>[] Headers() =>
+            [Sign(BuildFact, InstanceSecret), new(WebhookInbox.GitHubDeliveryHeader, guid)];
+        var target = new WebhookInbox.WebhookTarget("Redelivered", SecretKey);
+
+        var first = await Post(target, "Redelivered", Headers(), BuildFact, TestContext.Current.CancellationToken);
+        var again = await Post(target, "Redelivered", Headers(), BuildFact, TestContext.Current.CancellationToken);
+
+        first.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
+        again.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted, "the redelivery is answered, not refused");
+        first.NodePath.Should().EndWith("/" + Guid.Parse(guid).ToString("N"));
+        again.NodePath.Should().Be(first.NodePath);
+        (await InboxCount("Redelivered", TestContext.Current.CancellationToken)).Should().Be(1,
+            "a redelivery of a stored delivery writes nothing twice");
+    }
+
+    [Fact(Timeout = 120000)]
+    public async Task AnUnsignedDelivery_NeverClaimsTheDeliveryId_AndANonGuidIsIgnored()
+    {
+        await CreateTarget("Unsigned", TestContext.Current.CancellationToken);
+        var headers = new[] { new KeyValuePair<string, string>(WebhookInbox.GitHubDeliveryHeader, "082fa414-eb27-11f1-9490-2057ff95e683") };
+        var a = await Post(new WebhookInbox.WebhookTarget("Unsigned", null), "Unsigned", headers, "{\"n\":1}", TestContext.Current.CancellationToken);
+        var b = await Post(new WebhookInbox.WebhookTarget("Unsigned", null), "Unsigned", headers, "{\"n\":2}", TestContext.Current.CancellationToken);
+        b.NodePath.Should().NotBe(a.NodePath, "an unverified sender cannot pin an id");
+        (await InboxCount("Unsigned", TestContext.Current.CancellationToken)).Should().Be(2);
+        WebhookInbox.DeliveryIdOf(new Dictionary<string, string> { [WebhookInbox.GitHubDeliveryHeader] = "not-a-guid" })
+            .Should().BeNull();
+    }
+
     // ───────────────────────── #3312: the answer carries the verdict ─────────────────────────
 
     /// <summary>The build fact CD signs and posts.</summary>
