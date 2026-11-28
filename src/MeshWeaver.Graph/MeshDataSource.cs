@@ -1023,6 +1023,8 @@ public static class MeshDataSourceExtensions
     /// <param name="pending">The own-save tracker.</param>
     /// <param name="ticks">The sample ticks; null samples on <paramref name="interval"/>.</param>
     /// <param name="interval">The sample interval when <paramref name="ticks"/> is null.</param>
+    /// <param name="scheduler">Schedules the window when <paramref name="ticks"/> is null; ignored when
+    /// <paramref name="ticks"/> is supplied, because that stream already carries the timing.</param>
     /// <returns>The states to post, newest only.</returns>
     internal static IObservable<MeshNode> OwnSaveTicks(
         IObservable<MeshNode> gatedOwn, IObservable<System.Reactive.Unit> nudges, PendingOwnSave pending,
@@ -1080,7 +1082,22 @@ public static class MeshDataSourceExtensions
                         });
                 },
                 observer.OnError,
-                observer.OnCompleted);
+                () =>
+                {
+                    // Sample's contract: a value pending when the source completes is emitted, then the
+                    // sequence completes. Cancel the window first so it cannot emit a second time.
+                    bool flush;
+                    lock (gate)
+                    {
+                        flush = armed;
+                        armed = false;
+                    }
+
+                    window.Disposable = System.Reactive.Disposables.Disposable.Empty;
+                    if (flush)
+                        observer.OnNext(System.Reactive.Unit.Default);
+                    observer.OnCompleted();
+                });
             return new System.Reactive.Disposables.CompositeDisposable(upstream, window);
         });
 

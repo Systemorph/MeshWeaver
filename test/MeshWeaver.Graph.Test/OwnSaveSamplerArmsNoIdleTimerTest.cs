@@ -104,6 +104,31 @@ public class OwnSaveSamplerArmsNoIdleTimerTest
     }
 
     [Fact]
+    public void ACompletionWithAWindowOpenEmitsThePendingStateThenCompletes()
+    {
+        var clock = new TestScheduler();
+        var source = new Subject<int>();
+        var events = new List<string>();
+        using var _ = MeshDataSourceExtensions.SampleWhenPending(source, Interval, clock)
+            .Subscribe(__ => events.Add("tick"), () => events.Add("completed"));
+
+        source.OnNext(7);
+        source.OnCompleted();
+        clock.AdvanceBy(Interval.Ticks * 3);
+
+        // The same as Sample(interval): the pending value is flushed once, then the sequence completes.
+        Assert.Equal(["tick", "completed"], events);
+
+        var idle = new Subject<int>();
+        var idleEvents = new List<string>();
+        using var ___ = MeshDataSourceExtensions.SampleWhenPending(idle, Interval, clock)
+            .Subscribe(__ => idleEvents.Add("tick"), () => idleEvents.Add("completed"));
+        idle.OnCompleted();
+        clock.AdvanceBy(Interval.Ticks * 3);
+        Assert.Equal(["completed"], idleEvents);
+    }
+
+    [Fact]
     public void DisposingTheSamplerCancelsAPendingWindow()
     {
         var clock = new TestScheduler();
