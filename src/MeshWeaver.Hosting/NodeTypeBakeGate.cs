@@ -62,6 +62,7 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     private readonly ConcurrentDictionary<string, string> retired = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> retracted = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> withoutBaseline = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> errored = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// For each DERIVED regression (an <c>Upstream*</c> outcome), the upstream that blocked it —
@@ -138,6 +139,24 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// <see cref="BakePhase.Regressed"/> outranks it and keeps gating.</para>
     /// </summary>
     public bool AllowUnprovenBake { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>Whether a PER-PACKAGE NodeType failure refuses readiness</b> (Memex#1155, maintainer
+    /// 2026-11-28: <i>"we should probably allow the update and error the code which does not
+    /// compile"</i>). <c>true</c> is the strict reading this gate always had: one regressed type
+    /// puts the pod in <see cref="BakePhase.Regressed"/> and the whole platform roll stalls.
+    /// <c>false</c> is the declared policy of a host registration
+    /// (<see cref="NodeTypeBakeGateExtensions.PackageFailuresRefuseReadinessConfigKey"/>, default
+    /// off): such a type is recorded in <see cref="Errored"/>, stays at <c>CompilationStatus.Error</c>
+    /// with its diagnostics or named refusal, and the pod goes Ready.
+    ///
+    /// <para>What this relaxes is ONLY the verdict about a package's own type (a compile error, an
+    /// upstream that failed, a faulted activation, an uncovered adoption). It never touches
+    /// <see cref="BakePhase.Faulted"/>: a sweep or adoption that could not run at all is a platform
+    /// failure and keeps refusing. The class default is the strict reading, so a unit test that
+    /// builds the state directly pins it; the DI registration declares the policy.</para>
+    /// </summary>
+    public bool PackageFailuresRefuseReadiness { get; init; } = true;
 
     /// <summary>The current phase.</summary>
     public BakePhase Phase => (BakePhase)Volatile.Read(ref phase);
@@ -287,6 +306,30 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// 503 (fabrikam.example.com, 2026-09-15).</para>
     /// </summary>
     public IReadOnlyDictionary<string, string> WithoutBaseline => withoutBaseline;
+
+    /// <summary>
+    /// Types that FAILED on this image while <see cref="PackageFailuresRefuseReadiness"/> is off:
+    /// what would have been a regression (or, on an adopt-only boot, an uncovered type) is recorded
+    /// here and does not gate. The type's record on the mesh carries <c>CompilationStatus.Error</c>
+    /// and its <c>CompilationError</c>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Errored => errored;
+
+    /// <summary>
+    /// Every type this pod could not build: <see cref="Errored"/> plus <see cref="WithoutBaseline"/>
+    /// (a failure with no earlier working build to regress from). The ONE list the pod's single
+    /// summary line prints. Computed on read, so it is the same under either policy.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ErrorTypes
+    {
+        get
+        {
+            var all = new Dictionary<string, string>(withoutBaseline, StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in errored)
+                all[kv.Key] = kv.Value;
+            return all;
+        }
+    }
 
     /// <summary>
     /// Regressions that were RETRACTED because the type has since been observed reaching a usable
@@ -439,6 +482,16 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
         if (!outcome.HasRegressionBaseline || !outcome.WasHealthyBeforeBake)
         {
             withoutBaseline[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
+            return false;
+        }
+
+        // 🚨 Memex#1155 — a per-package failure is an ERROR ON THAT TYPE, not a verdict on the image,
+        // when the host declared so: record it, never gate. The type's own record carries
+        // CompilationStatus.Error + CompilationError (written by the compile, through the admitted
+        // publication gate), and an earlier loadable build for this framework keeps serving.
+        if (!PackageFailuresRefuseReadiness)
+        {
+            errored[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
             return false;
         }
 
@@ -692,6 +745,21 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
         var list = string.Join(", ", gating.Take(named).Select(e => $"{e.TypePath} ({e.State})"));
         if (gating.Count > named)
             list += $", …and {gating.Count - named} more";
+        if (!PackageFailuresRefuseReadiness)
+        {
+            // Memex#1155: an uncovered package type does not hold the platform roll. Nothing is
+            // compiled on this boot, so no verdict is stamped for it and no adoption stamp is
+            // published for a bundle that was never adopted: the type compiles on first access
+            // (the lazy path), where the compile watcher stamps Error with the diagnostics or the
+            // named refusal when it cannot build.
+            foreach (var e in gating)
+                errored[e.TypePath] = $"{e.State}: no CI-built bundle adopted on this image";
+            MarkComplete(
+                $"adopted the prebuilt bundles in {elapsed:hh\\:mm\\:ss} — adopted={adopted} of "
+                + $"{report.Entries.Count} dynamic NodeType(s); {gating.Count} not covered by a CI-built "
+                + $"bundle on this image, left to Error / lazy build: {list}");
+            return false;
+        }
         MarkFaulted(
             $"{gating.Count} dynamic NodeType(s) have no CI-built bundle adopted on this image "
             + $"(adopted={adopted} of {report.Entries.Count}): {list}");
@@ -786,7 +854,10 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     private string FaultedDetail(string message)
     {
         var head = $"bake NOT PROVEN — the sweep errored before it could verify this image: {message}";
-        var addenda = new List<string>(5);
+        var addenda = new List<string>(6);
+        if (!errored.IsEmpty)
+            addenda.Add($"{errored.Count} at Error on this image (this verdict still refuses readiness) — "
+                + string.Join(", ", errored.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!unevaluated.IsEmpty)
             addenda.Add($"{unevaluated.Count} not evaluated — "
                 + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)));
@@ -821,7 +892,10 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// </summary>
     private string CompleteDetail(string message)
     {
-        var addenda = new List<string>(5);
+        var addenda = new List<string>(6);
+        if (!errored.IsEmpty)
+            addenda.Add($"{errored.Count} at Error on this image, the roll proceeds — "
+                + string.Join(", ", errored.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!unevaluated.IsEmpty)
             addenda.Add($"{unevaluated.Count} not evaluated — "
                 + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)));
@@ -870,6 +944,14 @@ public static class NodeTypeBakeGateExtensions
     public const string HealthCheckName = "nodetype_bake";
 
     /// <summary>
+    /// Config key declaring that a PER-PACKAGE NodeType failure refuses readiness
+    /// (<see cref="NodeTypeBakeGateState.PackageFailuresRefuseReadiness"/>). Default: off (Memex#1155) —
+    /// the roll proceeds and the failing types are left at <c>CompilationStatus.Error</c>. Set it
+    /// <c>true</c> to restore the strict reading, where one regressed type stalls the roll.
+    /// </summary>
+    public const string PackageFailuresRefuseReadinessConfigKey = "PreWarm:PackageFailuresRefuseReadiness";
+
+    /// <summary>
     /// Config key for the operator escape hatch: serve even when the bake could not be PROVEN
     /// (<see cref="BakePhase.Faulted"/> — the sweep errored rather than finding nothing). Default:
     /// off, i.e. an unproven bake refuses readiness.
@@ -911,10 +993,16 @@ public static class NodeTypeBakeGateExtensions
         bool gatesReadiness = false,
         bool allowUnprovenBake = false)
     {
-        services.AddSingleton(new NodeTypeBakeGateState
+        services.AddSingleton(sp => new NodeTypeBakeGateState
         {
             GatesReadiness = gatesReadiness,
             AllowUnprovenBake = allowUnprovenBake,
+            // Declared by the host (Memex#1155): absent means a package's failure is an Error on
+            // that type and never a refusal. Only an explicit "true" restores the strict gate.
+            PackageFailuresRefuseReadiness = string.Equals(
+                sp.GetService<Microsoft.Extensions.Configuration.IConfiguration>()
+                    ?[NodeTypeBakeGateExtensions.PackageFailuresRefuseReadinessConfigKey],
+                "true", StringComparison.OrdinalIgnoreCase),
         });
         // 🚨 #3478 — the SAME verdict, now also gating MESH MEMBERSHIP and not merely traffic.
         // Registering the state as an IMeshAdmissionAuthority is what makes a refused pod inert

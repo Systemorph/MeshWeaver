@@ -52,9 +52,13 @@ namespace MeshWeaver.Hosting.Test;
 /// must still regress on the type. That proves the fixture produces the regression the fix removes,
 /// and that the fix relaxed nothing — a type no declared source covers is still refused.</para>
 /// </summary>
-public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutputHelper output)
+public abstract class RegistryOnlyInstallationFixture(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
+    /// <summary>Whether the host declares that a package type's failure REFUSES readiness
+    /// (<see cref="NodeTypeBakeGateExtensions.PackageFailuresRefuseReadinessConfigKey"/>).</summary>
+    protected abstract bool StrictGate { get; }
+
     private const string RegistryUrl = "https://registry.test";
     private const string Version = "1.0.0";
 
@@ -62,10 +66,10 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
     private const string OldMvid = "0000aaaa0000aaaa";
     private const string OldFramework = "c003e001";
 
-    private readonly string package = "Regpkg" + Guid.NewGuid().ToString("N")[..8];
-    private readonly FakeRegistry registry = new();
+    protected readonly string package = "Regpkg" + Guid.NewGuid().ToString("N")[..8];
+    protected readonly FakeRegistry registry = new();
 
-    private string TypePath => $"{package}/Widget";
+    protected string TypePath => $"{package}/Widget";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
@@ -94,7 +98,9 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
                         configuration.AddConfiguration(host);
                     return configuration.AddInMemoryCollection(
                         System.Collections.Immutable.ImmutableDictionary<string, string?>.Empty
-                            .Add(DynamicTypePreWarmerHostedService.EnabledConfigKey, "true")).Build();
+                            .Add(DynamicTypePreWarmerHostedService.EnabledConfigKey, "true")
+                            .Add(NodeTypeBakeGateExtensions.PackageFailuresRefuseReadinessConfigKey,
+                                StrictGate ? "true" : "false")).Build();
                 });
             });
 
@@ -107,15 +113,15 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
                 + "cannot layer onto it.");
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-    private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
-    private NodeTypeBakeGateState Gate => Mesh.ServiceProvider.GetRequiredService<NodeTypeBakeGateState>();
+    protected AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
+    protected NodeTypeBakeGateState Gate => Mesh.ServiceProvider.GetRequiredService<NodeTypeBakeGateState>();
 
-    private static byte[] AssemblyBytes() =>
-        File.ReadAllBytes(typeof(ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest).Assembly.Location);
+    protected static byte[] AssemblyBytes() =>
+        File.ReadAllBytes(typeof(RegistryOnlyInstallationFixture).Assembly.Location);
 
     /// <summary>The installation as the previous platform left it: an install record, and the
     /// package's module type in its own partition, carrying a working build of the old identity.</summary>
-    private async Task SeedInstallation(CancellationToken ct)
+    protected async Task SeedInstallation(CancellationToken ct)
     {
         using (Access.ImpersonateAsSystem())
         {
@@ -162,7 +168,7 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
         tracked.Should().BeFalse("precondition — the package's partition tracks no source, so only a bundle may serve it");
     }
 
-    private byte[] Bundle()
+    protected byte[] Bundle()
     {
         using var stream = new MemoryStream();
         BundleWriter.Write(
@@ -173,7 +179,7 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
     }
 
     /// <summary>Runs the hosted warm-up exactly as a portal does and waits for its terminal verdict.</summary>
-    private async Task<NodeTypeBakeGateState> WarmUp(CancellationToken ct)
+    protected async Task<NodeTypeBakeGateState> WarmUp(CancellationToken ct)
     {
         using var lifetime = new StartedLifetime();
         using var service = new DynamicTypePreWarmerHostedService(
@@ -192,55 +198,8 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
         return gate;
     }
 
-    [Fact(Timeout = 300_000)]
-    public async Task ADeclaredRegistryBundle_IsAdoptedBeforeTheSweepJudges_AndTheReplicaIsAdmitted()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        registry.Package = package;
-        registry.Bundle = Bundle();
-        await SeedInstallation(ct);
-        var bundleMvid = ServedBuildIdentity.OfBytes(AssemblyBytes());
-
-        var gate = await WarmUp(ct);
-
-        gate.Regressions.Keys.Should().NotContain(TypePath,
-            $"a type whose bundle the declared registry serves must not be judged before it is offered; "
-            + $"regressions: {string.Join(" | ", gate.Regressions.Select(r => $"{r.Key} → {r.Value}"))}");
-        registry.Downloads.Should().BeGreaterThan(0,
-            "the declared registry was ASKED for the package — without it nothing above tests anything");
-        gate.Phase.Should().Be(BakePhase.Complete);
-        gate.ReadinessGranted.Should().BeTrue(
-            "the replica measured every type it serves as usable — the incident's pod refused readiness for ever");
-
-        await Mesh.GetMeshNodeStream(TypePath)
-            .Select(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
-            .Should().Within(TestTimeouts.CrossSilo)
-            .Match(d => string.Equals(d?.LatestAssemblyMvid, bundleMvid, StringComparison.OrdinalIgnoreCase)
-                        && d?.CompiledFrameworkVersion == PrebuiltAssemblySeeder.LiveFrameworkMvid,
-                "the adoption stamp that was HELD while the bake measured is released on admission — the "
-                + "shared record now names the registry's bytes for this framework", ct);
-    }
-
-    [Fact(Timeout = 300_000)]
-    public async Task NegativeControl_ARegistryThatServesNoBundleForTheType_StillRefusesReadiness()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        // The registry answers, but names no bundle for the package.
-        registry.Package = null;
-        await SeedInstallation(ct);
-
-        var gate = await WarmUp(ct);
-
-        gate.Phase.Should().Be(BakePhase.Regressed,
-            "with no declared source covering the type the gate is exactly as strict as before — the fix "
-            + "orders the adoption, it relaxes no verdict");
-        gate.Regressions.Keys.Should().Contain(TypePath);
-        gate.ReadinessGranted.Should().BeFalse();
-        registry.Downloads.Should().Be(0, "nothing was advertised, so nothing was downloaded");
-    }
-
     /// <summary>The registry's bundle routes: its index, and one package's bundle, counted.</summary>
-    private sealed class FakeRegistry : HttpMessageHandler
+    protected sealed class FakeRegistry : HttpMessageHandler
     {
         private int downloads;
 
@@ -313,5 +272,60 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
             stopping.Dispose();
             stopped.Dispose();
         }
+    }
+}
+
+/// <summary>The STRICT reading (<c>PreWarm:PackageFailuresRefuseReadiness=true</c>): the original
+/// contract of the gate, kept as a declared option.</summary>
+public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutputHelper output)
+    : RegistryOnlyInstallationFixture(output)
+{
+    protected override bool StrictGate => true;
+
+    [Fact(Timeout = 300_000)]
+    public async Task ADeclaredRegistryBundle_IsAdoptedBeforeTheSweepJudges_AndTheReplicaIsAdmitted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        registry.Package = package;
+        registry.Bundle = Bundle();
+        await SeedInstallation(ct);
+        var bundleMvid = ServedBuildIdentity.OfBytes(AssemblyBytes());
+
+        var gate = await WarmUp(ct);
+
+        gate.Regressions.Keys.Should().NotContain(TypePath,
+            $"a type whose bundle the declared registry serves must not be judged before it is offered; "
+            + $"regressions: {string.Join(" | ", gate.Regressions.Select(r => $"{r.Key} → {r.Value}"))}");
+        registry.Downloads.Should().BeGreaterThan(0,
+            "the declared registry was ASKED for the package — without it nothing above tests anything");
+        gate.Phase.Should().Be(BakePhase.Complete);
+        gate.ReadinessGranted.Should().BeTrue(
+            "the replica measured every type it serves as usable — the incident's pod refused readiness for ever");
+
+        await Mesh.GetMeshNodeStream(TypePath)
+            .Select(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
+            .Should().Within(TestTimeouts.CrossSilo)
+            .Match(d => string.Equals(d?.LatestAssemblyMvid, bundleMvid, StringComparison.OrdinalIgnoreCase)
+                        && d?.CompiledFrameworkVersion == PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                "the adoption stamp that was HELD while the bake measured is released on admission — the "
+                + "shared record now names the registry's bytes for this framework", ct);
+    }
+
+    [Fact(Timeout = 300_000)]
+    public async Task NegativeControl_ARegistryThatServesNoBundleForTheType_StillRefusesReadiness_WhenTheHostDeclaresStrict()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // The registry answers, but names no bundle for the package.
+        registry.Package = null;
+        await SeedInstallation(ct);
+
+        var gate = await WarmUp(ct);
+
+        gate.Phase.Should().Be(BakePhase.Regressed,
+            "with no declared source covering the type the gate is exactly as strict as before — the fix "
+            + "orders the adoption, it relaxes no verdict");
+        gate.Regressions.Keys.Should().Contain(TypePath);
+        gate.ReadinessGranted.Should().BeFalse();
+        registry.Downloads.Should().Be(0, "nothing was advertised, so nothing was downloaded");
     }
 }
