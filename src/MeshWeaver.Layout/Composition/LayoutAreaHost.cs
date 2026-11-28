@@ -802,19 +802,54 @@ public record LayoutAreaHost : IDisposable
 
     private IMessageDelivery OnCloseDialog(IMessageDelivery<CloseDialogEvent> request)
     {
-        if (GetControl(request.Message.Area) is DialogControl { CloseAction: not null } control)
+        var area = request.Message.Area;
+        var closed = GetControl(area) as DialogControl;
+        if (closed is { CloseAction: not null } control)
         {
             InvokeAsync(() =>
             {
                 control.CloseAction.Invoke(
-                    new(request.Message.Area, request.Message.State,
+                    new(area, request.Message.State,
                         request.Message.Payload ?? new object(), Hub, this));
+                ClearClosedDialog(area, closed);
                 AcceptUserAction(request);
             }, ex => FailRequest(ex, request));
             return request.Processed();
         }
 
+        // 🚨 A closable dialog WITHOUT a CloseAction must still leave the store: nothing else removes
+        // it, so the next dialog of the same shape was Equal to the stale entry, produced no change on
+        // the client and showed nothing.
+        ClearClosedDialog(area, closed);
         return AcceptUserAction(request);
+    }
+
+    /// <summary>
+    /// Removes the closed dialog's entry from the store — whether or not it had a CloseAction. The
+    /// removal is conditional, evaluated INSIDE the serialised update: when the CloseAction (or anything
+    /// else) already replaced the area with a different control — an error dialog, the next step of a
+    /// wizard — that replacement is left alone.
+    /// </summary>
+    private void ClearClosedDialog(string area, DialogControl? closed)
+    {
+        if (closed is null)
+            return;
+        Stream.Update(store =>
+        {
+            var current = store?.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
+                ?.Instances.GetValueOrDefault(area);
+            // A replacement that is value-equal to the closed dialog is indistinguishable from it
+            // here: the store keeps the existing instance when an Equal control is written over it
+            // (that dedupe is the very reason a stale entry mattered), so only a DIFFERENT control
+            // is left alone. Nothing to clear is a no-op, not an empty change.
+            if (store is null || !ReferenceEquals(current, closed) && !closed.Equals(current))
+                return null;
+            var context = new RenderingContext(area);
+            var changes = DisposeChildAreas(store, context);
+            var removed = RemoveViews(changes.Store, area);
+            return Stream.ApplyChanges(
+                new(removed.Store, changes.Updates.Concat(removed.Updates), Stream.StreamId));
+        }, ex => logger.LogWarning(ex, "Cannot clear closed dialog {Area}", area));
     }
 
     private IMessageDelivery OnBlur(IMessageDelivery<BlurEvent> request)
