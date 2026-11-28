@@ -160,6 +160,8 @@ public sealed class GrantSubjectsQueryProvider(IServiceProvider services) : IMes
                     var item = change.Items[i];
                     var at = rows.FindIndex(r => SamePath(r, item));
                     rows = at >= 0 ? rows.SetItem(at, item) : rows.Add(item);
+                    // Upstream contract: Scores, when present, is index-aligned with Items. A frame whose
+                    // list does not line up carries no usable ranking, so it is ignored as a whole.
                     if (change.Scores is { } sc && sc.Count == change.Items.Count && item.Path is { } path)
                         scores = scores.SetItem(path, sc[i]);
                 }
@@ -192,7 +194,9 @@ public sealed class GrantSubjectsQueryProvider(IServiceProvider services) : IMes
             return [Change<T>(QueryChangeType.Initial, current.Rows, parsed, current)];
         var removed = previous.Rows.Where(p => !current.Rows.Any(c => SamePath(c, p))).ToList();
         var added = current.Rows.Where(c => !previous.Rows.Any(p => SamePath(c, p))).ToList();
-        var updated = current.Rows.Where(c => previous.Rows.Any(p => SamePath(c, p) && !ReferenceEquals(c, p) && !Equals(c, p))).ToList();
+        // A re-rank of the SAME rows (new score, equal node) is an update too — the picker orders by score.
+        var updated = current.Rows.Where(c => previous.Rows.Any(p => SamePath(c, p)
+            && ((!ReferenceEquals(c, p) && !Equals(c, p)) || ScoreOf(previous, p) != ScoreOf(current, c)))).ToList();
         var changes = ImmutableList.CreateBuilder<QueryResultChange<T>>();
         if (removed.Count > 0) changes.Add(Change<T>(QueryChangeType.Removed, removed, parsed, current));
         if (added.Count > 0) changes.Add(Change<T>(QueryChangeType.Added, added, parsed, current));
@@ -202,14 +206,22 @@ public sealed class GrantSubjectsQueryProvider(IServiceProvider services) : IMes
         return changes.ToImmutable();
     }
 
+    private static double? ScoreOf(Folded state, MeshNode node)
+        => state.Scores is { } map && node.Path is { } path && map.TryGetValue(path, out var v) ? v : null;
+
     private static QueryResultChange<T> Change<T>(
         QueryChangeType type, IEnumerable<MeshNode> nodes, ParsedQuery parsed, Folded state)
     {
         var items = nodes.ToList();
         IReadOnlyList<double>? scores = null;
-        if (state.Scores is { Count: > 0 } map && items.Count > 0
-            && items.Any(n => n.Path is { } p && map.ContainsKey(p)))
-            scores = items.Select(n => n.Path is { } p && map.TryGetValue(p, out var v) ? v : 0d).ToList();
+        // Scores are emitted only when EVERY item of the frame has one: a partial list would make
+        // "no relevance" indistinguishable from "relevance 0".
+        if (state.Scores is { Count: > 0 } map && items.Count > 0)
+        {
+            var all = items.Select(n => n.Path is { } p && map.TryGetValue(p, out var v) ? (double?)v : null).ToList();
+            if (all.All(v => v.HasValue))
+                scores = all.Select(v => v.GetValueOrDefault()).ToList();
+        }
         return new QueryResultChange<T>
         {
             ChangeType = type,

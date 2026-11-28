@@ -74,4 +74,31 @@ public class GrantSubjectsPartialReadTest
 
         folded.SnapshotIncomplete.Should().BeFalse();
     }
+
+    [Fact]
+    public void AReRankOfTheSameRows_IsAnnouncedAsAnUpdate()
+    {
+        var before = Fold(Frame(QueryChangeType.Initial, User("a"), User("b")) with { Scores = [0.2, 0.9] });
+        var after = Fold(
+            Frame(QueryChangeType.Initial, User("a"), User("b")) with { Scores = [0.2, 0.9] },
+            Frame(QueryChangeType.Updated, User("a"), User("b")) with { Scores = [0.8, 0.9] });
+
+        var emitted = GrantSubjectsQueryProvider.Diff<MeshNode>(before, after, ParsedQuery.Empty).Single();
+
+        emitted.ChangeType.Should().Be(QueryChangeType.Updated);
+        emitted.Items.Select(n => n.Path).Should().Equal("a");
+        emitted.Scores.Should().Equal(0.8);
+    }
+
+    [Fact]
+    public void APartialRanking_EmitsNoScoresRatherThanZeros()
+    {
+        var folded = Fold(
+            Frame(QueryChangeType.Initial, User("a")) with { Scores = [0.5] },
+            Frame(QueryChangeType.Added, User("b")));
+
+        var emitted = GrantSubjectsQueryProvider.Diff<MeshNode>(null, folded, ParsedQuery.Empty).Single();
+
+        emitted.Scores.Should().BeNull();
+    }
 }
