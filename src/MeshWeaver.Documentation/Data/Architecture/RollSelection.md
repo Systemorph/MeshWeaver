@@ -326,7 +326,7 @@ no way, anywhere, to ask *"which release should this environment be on"*.
   exemption, preserved exactly: a module-only or NodeType-less package produces no bundle ever and is
   not demanded, because demanding one would report it as lagging on that environment forever.
 - **Other node repos' packages that this publication never composed.** Run 7926 discovered 60
-  packages from `MeshWeaver.Plugins`; that portal carries plugin roots from `MeshWeaver.Crm`,
+  packages from `MeshWeaver.Plugins`; that portal carries plugin roots from other repositories,
   `.SocialMedia` and `.Manufacturing` too. Those are shipped by their own repos' publications, and
   a selection made against one publication is silent about them.
 

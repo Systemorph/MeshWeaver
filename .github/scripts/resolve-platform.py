@@ -1322,8 +1322,8 @@ class CeilingEvidence(NamedTuple):
     unreadable: int              # examined rows whose annotations GitHub would not serve
     silent: int                  # rows that carried the job and published NO notice at all
     ambiguous: int               # rows that published two different sets under the notice title
-    # 🚨 SEPARATE FROM `silent`, and the separation is the point (Copilot review on
-    # MeshWeaver.Crm#128). A run that PUBLISHED a notice whose message names no set has answered —
+    # 🚨 SEPARATE FROM `silent`, and the separation is the point (Copilot review on a
+    # vendored copy). A run that PUBLISHED a notice whose message names no set has answered —
     # the fault is a malformed notice or a schema change that moved the set out of the message, and
     # the remedy is to look at that notice. Counted as `silent` it was reported as a run that
     # "published no notice", which is the opposite of true and sends the reader to fix `main` when
@@ -1827,7 +1827,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             candidate = (annotations if isinstance(annotations, list)
                          else annotations.get("annotations") or [])
             # 🚨 ANY NON-EMPTY LIST IS *THIS* ATTEMPT'S ANSWER (Copilot review on
-            # MeshWeaver.Education#352, MeshWeaver.Crm#128, MeshWeaver.Reinsurance#221 — one
+            # MeshWeaver.Education#352, MeshWeaver.Reinsurance#221 and a third — one
             # finding against three vendored copies of this file). #4491's licence is a LOST
             # annotation: the record came back EMPTY because a partial re-run re-created it
             # carrying none. This guard asked instead whether any row matched our TITLE, which is
@@ -5677,7 +5677,7 @@ def self_test() -> int:
                   "alone",
                   _fetch_unparseable("the platform set is now reported elsewhere"), None,
                   "the platform set is now reported elsewhere")
-    # 🚨 …AND THE SUMMARY SEPARATES THEM TOO (Copilot review on MeshWeaver.Crm#128). #4493 split
+    # 🚨 …AND THE SUMMARY SEPARATES THEM TOO (Copilot review on a vendored copy). #4493 split
     # the two per-run NOTES and left the aggregate counting both as `silent`, under a sentence
     # saying those runs "published no notice" — which is the opposite of true for the unparseable
     # half, and points the reader at "main published nothing" when the actual fault is a malformed

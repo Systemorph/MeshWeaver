@@ -295,7 +295,7 @@ here in some form:
 
 - **Discover the fleet, never commit it.** The repository list comes from the App installation
   (`/installation/repositories`), so a repository added to the org is swept the day the App reaches
-  it. `MeshWeaver.Crm` pins the same tester digest as three other repos and is absent from
+  it. A repository pinning the same tester digest as three others can be absent from
   `.github/shared-rules.json`'s `repos` array — a check keyed on that list would have swept six and
   silently left a seventh out.
 

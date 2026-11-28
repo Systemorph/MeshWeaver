@@ -510,7 +510,7 @@ public static class CreateLayoutArea
             // target's own ancestor chain: no declaration on the parent NodeType could add one
             // and none could take one away. NodeTypeDefinition.CreatableTypes,
             // NodeTypeDefinition.IncludeGlobalTypes and MeshConfiguration.GlobalCreatableTypes
-            // were documented, populated by modules — MeshWeaver.Crm#82 declared
+            // were documented, populated by modules — the CRM declared
             // `"creatableTypes": ["Crm/Question"]` on Crm/Offer — and read by nothing.
             //
             // The provider resolves all of it in one place: the namespace-scoped discovery

@@ -68,8 +68,8 @@ label:bug  label:sev:B  state:open   →   must be ZERO
 label:bug  label:sev:H  state:open   →   must be ZERO
 ```
 
-across the **seven repositories** that carry the taxonomy: `MeshWeaver`, `MeshWeaver.Plugins`,
-`MeshWeaver.Crm`, `MeshWeaver.SocialMedia`, `MeshWeaver.Reinsurance`, `MeshWeaver.Manufacturing`,
+across the **six repositories** that carry the taxonomy: `MeshWeaver`, `MeshWeaver.Plugins`,
+`MeshWeaver.SocialMedia`, `MeshWeaver.Reinsurance`, `MeshWeaver.Manufacturing`,
 `MeshWeaver.Education`. `Memex` and `MeshWeaver.Feedback` are deliberately not gated: they ship no
 product code.
 
