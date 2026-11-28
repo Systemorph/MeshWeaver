@@ -196,6 +196,7 @@ Controls.Stack
 | `WithModelSize(width, height)` | The picture's full extent in model units — required for the crop tool | — |
 | `WithCrop(left, top, right, bottom)` | Bind the crop tool to the four trims (typically `JsonPointerReference`s into the node) | no crop tool |
 | `WithShapes(shapes, tool, newShape?)` | Bind the shape tools: a list of shapes, the active `ImageCanvasTool`, and the template a new shape copies (its colour, stroke…) | no shape tools |
+| `WithSelection(selected)` | Bind the selected shape's index in the list, which the renderer writes and follows (-1 = none) | selection stays inside the renderer |
 | `WithMaxHeight(object)` | The tallest the picture is drawn (CSS length); its width never exceeds the container | `70vh` |
 | `WithAlt(object)` | The picture's accessible name | — |
 
@@ -219,6 +220,15 @@ carried through unchanged, so a package keeps its own shape record; a new elemen
 distance and boxes by inside, a move clamped to the picture, a press shorter than
 `ImageCanvasShapes.DragThreshold` screen pixels is a click — are `ImageCanvasShapes`, and every
 renderer applies them.
+
+**The selection.** Bind `WithSelection` to a number and the renderer writes the full-list index of
+the selected shape there: on a click that selects or deselects, on drawing (the new shape becomes
+selected), on Delete and Escape (-1). It also follows the value, so a page that sets it selects a
+shape. The point is the page beside the canvas. The renderer only knows a shape's geometry, so
+everything else about it (its colour, its text, its size) is edited by the page, and the page needs
+to know WHICH shape: with the index it binds a colour field or a text field to that element of the
+list. An index outside the list, or one that points at an entry that is not a shape, means no
+selection.
 
 ```csharp --render InputImageCanvasShapes --show-code
 Controls.Stack

@@ -175,6 +175,16 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
     /// </summary>
     internal int LiveDrainLoops => Volatile.Read(ref _delegatesQueuedOrRunning);
 
+    /// <summary>Tasks queued and not yet taken by a lane thread — what a verdict names when a drain "was accepted and never ran".</summary>
+    internal int QueuedTasks
+    {
+        get
+        {
+            lock (_tasks)
+                return _tasks.Count;
+        }
+    }
+
     /// <summary>Lane threads currently parked waiting for work (dedicated mode; always 0 otherwise).</summary>
     internal int ParkedLaneThreads
     {
