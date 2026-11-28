@@ -2811,12 +2811,49 @@ public static class ModuleActivationSidecar
     /// <see cref="TryReadWithWriteTime"/>: every file read here is published by a rename.</summary>
     private static string? TryReadAllText(string path) => TryReadWithWriteTime(path)?.Text;
 
+    /// <summary>The pause before each re-try of a refused overwrite: bounded, and short because the
+    /// holder is another replica's read, which lasts milliseconds.</summary>
+    internal static readonly TimeSpan[] WriteRetryDelays =
+        [TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(800)];
+
+    /// <summary>
+    /// Writes <paramref name="path"/> by one rename of a complete temp file.
+    ///
+    /// <para>🚨 <b>The overwrite is re-tried, and a temp is never left behind.</b> <c>/data</c> is one
+    /// Azure Files (CIFS) share every replica mounts; a replica that has the target OPEN makes the
+    /// overwrite-rename of another fail with <see cref="UnauthorizedAccessException"/> ("Access to the
+    /// path … is denied") although every file and directory is mode 0777 and owned by the one uid, so
+    /// ownership is not the fault. MEASURED 2026-11-28 on the registry: a publish of one module was
+    /// answered HTTP 500 with exactly that text for <c>activation.d/&lt;Name&gt;.json</c>, and its
+    /// <c>&lt;Name&gt;.json.&lt;guid&gt;.tmp</c> was still on the share, never cleaned (three more such
+    /// orphans, hours old, beside it). The holder lets go in milliseconds, so a bounded re-try
+    /// answers it; a fault that outlasts the schedule still throws, with the temp removed.</para>
+    /// </summary>
     private static void WriteAtomic(string path, string content)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        File.WriteAllText(temp, content);
-        File.Move(temp, path, overwrite: true);
+        try
+        {
+            File.WriteAllText(temp, content);
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    File.Move(temp, path, overwrite: true);
+                    return;
+                }
+                catch (Exception e) when (e is UnauthorizedAccessException or IOException
+                                          && attempt < WriteRetryDelays.Length)
+                {
+                    System.Threading.Thread.Sleep(WriteRetryDelays[attempt]);
+                }
+            }
+        }
+        finally
+        {
+            DeleteTemp(temp);
+        }
     }
 }
 
