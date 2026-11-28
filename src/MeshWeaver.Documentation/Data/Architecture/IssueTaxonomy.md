@@ -237,13 +237,13 @@ as triage files new work, and let closure — not labelling — dispose of what 
 
 ## The first classification pass — 2026-09-20
 
-All 127 open issues across the five repositories were classified in one pass.
+All 127 open issues across the five repositories of the day (one of them since archived) were classified in one pass.
 
 | | bugs | `sev:B` | `sev:H` | `sev:M` | `sev:L` |
 |---|---|---|---|---|---|
 | MeshWeaver | 63 | **0** | 18 | 32 | 13 |
 | MeshWeaver.Plugins | 21 | **0** | 11 | 8 | 2 |
-| Crm · Reinsurance · Education | 2 | **0** | 0 | 2 | 0 |
+| Reinsurance · Education · a since-archived repo | 2 | **0** | 0 | 2 | 0 |
 
 **Read the zero carefully.** The classifiers were instructed never to guess `B`, so it means
 *nothing was proven blocking* — not *nothing blocks*. On the day the taxonomy was introduced the

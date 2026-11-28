@@ -500,8 +500,8 @@ CI"*; [Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) →
 the lane fetches the platform's copy at the pin; repos keep only allow-files"*).
 
 It was vendored per repo until 2026-09-07, and by then the six copies were five different vintages —
-MeshWeaver.Plugins 1157 lines, Crm 646, Education 646, Reinsurance 644, SocialMedia 643, Manufacturing
-305. Each fix landed in whichever copy hit the bug and the other five kept it: `#434` (a release has two
+MeshWeaver.Plugins 1157 lines, Education 646, Reinsurance 644, SocialMedia 643, Manufacturing
+305, a since-archived repo 646. Each fix landed in whichever copy hit the bug and the other five kept it: `#434` (a release has two
 witnesses), `#942`/`#1023` (`--resolve`), and `#1426` — the trunk baseline resolved against the remote's
 **live tip**, which reds every intermediate commit of a merge-queue group on `main`, because the tree
 under test is compared against locks committed *after* it. Manufacturing's copy never grew the trunk
@@ -574,7 +574,7 @@ an untouched `root.iterdir()` walk would otherwise pass while the gate still dis
 config, any disagreement.
 The flip of the absent case to red is a change to the guard once every caller has adopted, never a
 date. Canonical first, repos adopt, guard tightens when it can only pass. **It has now tightened.**
-Every caller of the shared validate lane exposes `package_dirs` (Crm, FundReporting, Manufacturing,
+Every caller of the shared validate lane exposes `package_dirs` (FundReporting, Manufacturing,
 Reinsurance, SocialMedia, Plugins, and Education last, in MeshWeaver.Education#391), so an absent
 function is `::error::… exposes no package_dirs(root)`. A new node repo adopts it on day one.
 

@@ -44,7 +44,7 @@ MeshWeaver.PluginCatalog:MeshWeaver.PluginCatalog.IModuleUpdatePolicy  #7118 —
 # one), the second purged Autofac's reflection caches on load-context unload — no forwarder can
 # keep either without keeping Autofac. Their only callers were core's own (ModuleLoadContext,
 # CompilationCacheService); no fleet repository names them (git grep over origin/main of
-# MeshWeaver.Plugins, .Education, .Reinsurance, .SocialMedia, .Manufacturing, .Crm and Memex: 0
+# MeshWeaver.Plugins, .Education, .Reinsurance, .SocialMedia, .Manufacturing and Memex: 0
 # files). A module compiled against an earlier platform that still bound one is reported
 # Unlinkable (ModulePlatformLink).
 MeshWeaver.ServiceProvider:MeshWeaver.ServiceProvider.NotOwnedServiceDescriptorExtensions  #7147 — deleted with Autofac, not moved; signature is Autofac's ContainerBuilder; no caller outside core

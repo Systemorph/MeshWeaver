@@ -4,7 +4,7 @@ name: Node repo retry known transients (reusable)
 # repository in the fleet, core included (core's own retry-known-transients.yml calls this file).
 #
 # 🚨 WHY A LANE AND NOT A COPY (MeshWeaver.Manufacturing#84). The satellites carried hand-copied
-# inline shell that had drifted three ways: Manufacturing, Reinsurance and Crm read job LOGS only,
+# inline shell that had drifted three ways: Manufacturing and Reinsurance read job LOGS only,
 # so when a self-hosted runner died — no log is ever uploaded, and the reason ("The self-hosted
 # runner lost communication with the server") exists only in the job's check-run ANNOTATION — they
 # printed "GitHub holds no log (HTTP 404) — cannot prove a transient, no retry" and the ci-main-red

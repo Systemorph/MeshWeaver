@@ -74,4 +74,4 @@ in the script for a FileSystem-served tree that genuinely needs it.
 
 Every caller's default branch plus core: 19,569 files, 16,353 node candidates. One group, core's
 `samples/Graph/Data/ACME.json` + `ACME/index.md` — the adapter's merged pair above. No collision in
-MeshWeaver.Plugins, .Education, .Reinsurance, .SocialMedia, .Manufacturing, .Crm or Memex.
+MeshWeaver.Plugins, .Education, .Reinsurance, .SocialMedia, .Manufacturing or Memex.

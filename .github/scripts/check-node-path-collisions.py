@@ -173,7 +173,7 @@ def repo_dirs(root: Path) -> list[Path]:
     canonical `gen-manifests.py --list-packages` refuses a repo with no `gen-manifests.config.json`
     (two lane callers have none), and a gate that cannot enumerate must neither skip nor red the
     fleet. Over-inclusion can only ADD files to compare; measured over every caller's main
-    (Plugins, Education, Reinsurance, SocialMedia, Manufacturing, Crm, Memex — 12,476 files) it
+    (Plugins, Education, Reinsurance, SocialMedia, Manufacturing, Memex — 12,476 files) it
     finds no group outside a package, so it costs no false red today. Top-level FILES are included:
     a root `index.*` is the GitSync Space root."""
     return sorted(e for e in root.iterdir()

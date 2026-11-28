@@ -97,7 +97,7 @@ caller passes into a shared `workflow_call` lane. Measured that way on 2026-09-0
 | Memex | `MESHWEAVER_APP_PRIVATE_KEY` | **latent** — its `auto-arm` calls core's shared lane with the same pair |
 
 **There are no controls.** Under the correct denominator every repository in the fleet has or had a
-gap; Crm and Education only looked clean because their preflights were the *least* complete, which
+gap; Education only looked clean because their preflights were the *least* complete, which
 is the failure mode inverting the signal.
 
 ### Two structural facts that shape any fix
@@ -148,7 +148,7 @@ That is the test. An actor exemption is legitimate **only** where the same gate 
 
 **Measured 2026-09-06: core meets it and nothing else does.** `Systemorph/MeshWeaver` ruleset
 2128472 carries a `merge_queue` rule. Every other repo in the fleet — Plugins, Reinsurance,
-SocialMedia, Crm, Manufacturing, Education, Memex — has only `deletion`, `non_fast_forward`,
+SocialMedia, Manufacturing, Education, Memex — has only `deletion`, `non_fast_forward`,
 `copilot_code_review` and (some) `pull_request` / `required_status_checks`; no `merge_queue` rule in
 any ruleset and no merge-queue block in classic branch protection. Several satellites *do* carry a
 `merge_group:` trigger in `ci.yml`, which is the trap: **the trigger exists, the event never fires.**
@@ -160,7 +160,7 @@ contexts are the gate jobs themselves (`compile-check / …`, `test-repos / …`
 — see [Reading CI Signals](/Doc/Architecture/ReadingCiSignals). The Dependabot PR would go from
 "red, honestly" to "green, having proven nothing".
 
-**4 · A Dependabot PR is the case where the gate matters most.** Manufacturing and Crm watch exactly
+**4 · A Dependabot PR is the case where the gate matters most.** Manufacturing watches exactly
 one ecosystem, `github-actions`. The diff *is* the CI's own plumbing — `actions/download-artifact`
 7 → 8 in Manufacturing#40. A gate exempted from the PR that changes the gate's own machinery is the
 worst possible place to spend the exemption.
@@ -301,9 +301,9 @@ them needs nobody who holds a secret. Fourteen were mirrored this way on 2026-09
 
 | name | value established from | mirrored into |
 |---|---|---|
-| `AZURE_CLIENT_ID` | the `github-actions-bake` user-assigned identity — the only principal in the tenant with a federated credential for these repos (`repo:Systemorph/<repo>:ref:refs/heads/main`, in both the classic and the immutable subject format), holding exactly *Storage File Data Privileged Contributor* on the bake storage account | Reinsurance, SocialMedia, Crm, Education |
-| `AZURE_TENANT_ID` | that identity's tenant (`az account show`) | the same four |
-| `AZURE_SUBSCRIPTION_ID` | the subscription of the storage account each repo's own `vars.BAKE_PUBLISH_TARGETS` names | the same four |
+| `AZURE_CLIENT_ID` | the `github-actions-bake` user-assigned identity — the only principal in the tenant with a federated credential for these repos (`repo:Systemorph/<repo>:ref:refs/heads/main`, in both the classic and the immutable subject format), holding exactly *Storage File Data Privileged Contributor* on the bake storage account | Reinsurance, SocialMedia, Education |
+| `AZURE_TENANT_ID` | that identity's tenant (`az account show`) | the same three |
+| `AZURE_SUBSCRIPTION_ID` | the subscription of the storage account each repo's own `vars.BAKE_PUBLISH_TARGETS` names | the same three |
 | `MESHWEAVER_APP_ID` | `gh api /apps/meshweaver-cloud` — a public App id, and the App `auto-arm.yml` names by slug | MeshWeaver, Memex, Education |
 
 **Giving a Dependabot run the OIDC client id grants it nothing.** Federation is keyed on the token's
