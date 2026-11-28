@@ -183,12 +183,42 @@ jobs:
           # No `2>/dev/null` and no `|| true`: a failed enumeration must print WHY. Swallowing it
           # would turn "the token cannot read the org" into "the fleet is empty", which is the one
           # answer this job must never produce (check-workflow-shell.py's `swallow` class).
-          if ! reachable=$(gh api --paginate /installation/repositories \
-                             --jq '.repositories[].full_name'); then
-            echo "::error::the minted installation token could not enumerate its own repositories."
-            echo "  /installation/repositories is the endpoint an installation token answers about"
-            echo "  itself, so this is the token, not the network. Confirm the fleet-reader App"
-            echo "  is installed on the Systemorph org and holds Contents: Read."
+          # A 5xx or a transport error is the API's, not the token's (run 46144220562: HTTP 502
+          # on a good token): retry up to 3 attempts, 5 s and 15 s apart. Only 401/403/404 blame the token.
+          err=$(mktemp)
+          reachable=""
+          ok=0
+          code=""
+          for delay in 5 15 0; do
+            if reachable=$(gh api --paginate /installation/repositories \
+                             --jq '.repositories[].full_name' 2>"$err"); then
+              ok=1
+              break
+            fi
+            cat "$err"
+            code=$(grep -oE 'HTTP [0-9]{3}' "$err" | tail -1 | grep -oE '[0-9]{3}' || true)
+            case "$code" in
+              401|403|404) break ;;
+            esac
+            # The last attempt has no successor: delay 0 means "no wait, fall through to the report".
+            [ "$delay" -gt 0 ] || break
+            echo "enumeration failed (${code:-transport error}); retrying in ${delay}s"
+            sleep "$delay"
+          done
+          rm -f "$err"
+          if [ "$ok" -ne 1 ]; then
+            case "$code" in
+              401|403|404)
+                echo "::error::the minted installation token could not enumerate its own repositories (HTTP $code)."
+                echo "  /installation/repositories is the endpoint an installation token answers about"
+                echo "  itself, so this is the token. Confirm the fleet-reader App"
+                echo "  is installed on the Systemorph org and holds Contents: Read."
+                ;;
+              *)
+                echo "::error::GitHub API unavailable (HTTP ${code:-none}): /installation/repositories failed after 3 attempts."
+                echo "  A 5xx or transport error is GitHub's, not the token's. Re-run the job."
+                ;;
+            esac
             exit 1
           fi
           count=$(printf '%s\n' "$reachable" | grep -c . || true)

@@ -61,6 +61,10 @@ PLAN_RE = re.compile(
     r"^shard (?P<index>\d+)/(?P<total>\d+): gating (?P<gated>\d+) of (?P<discovered>\d+) "
     r"discovered package\(s\) — (?P<names>.*?); installing \d+ support package\(s\)")
 
+# The platform receipt `node-repo-gate.yml` writes as the FIRST line of every shard's log:
+#     gate platform: set 4.0.14446 (re-resolved: the set this run resolved was overtaken …)
+PLATFORM_RE = re.compile(r"^gate platform: set (?P<set>\S+)")
+
 # `[PASS] Store (116 node(s), 10 type(s))`, optionally trailed by `[N/M content asset(s) served]`
 # (GateReport.WriteSummary, for a package that ships content assets — a GATED package still),
 # then optionally by an `[upstream: …]` / `[support: …]` marker. ONLY the marker says a line is
@@ -89,6 +93,12 @@ class ShardLog:
             match = PLAN_RE.match(line)
             if match:
                 self.plan = match
+                break
+        self.platform = None
+        for line in text.splitlines():
+            match = PLATFORM_RE.match(line)
+            if match:
+                self.platform = match["set"]
                 break
         self.blocks, self.verdict = _summary_blocks(text)
 
@@ -206,6 +216,28 @@ def fold(logs: dict[int, str], shards: int) -> tuple[str, list[str]]:
                     f"the shards gated {len(claimed)} package(s) between them but discovered "
                     f"{total} — {missing} fell between the slices and NOTHING judged them.")
 
+    # ── ONE PLATFORM: every shard gated against the SAME set ──
+    # A fan-out whose parts disagree must never report green. Each shard resolves its own platform
+    # (a newer sealed set is taken, and a set overtaken while a shard waited is re-resolved), so two
+    # shards of one run CAN end on different sets; the verdicts of the two halves are then judged
+    # against two platforms and no longer add up to one gate. The receipt makes that visible.
+    if shards > 1:
+        sets = {index: shard.platform for index, shard in sorted(parsed.items())}
+        named = {v for v in sets.values() if v}
+        if named and any(v is None for v in sets.values()):
+            silent = [i for i, v in sets.items() if v is None]
+            problems.append(
+                f"shard(s) {silent} printed no `gate platform:` receipt while the others did — "
+                f"which platform they gated against cannot be read, so the shards cannot be shown "
+                f"to have gated one set.")
+        elif len(named) > 1:
+            problems.append(
+                f"the shards gated against DIFFERENT platform sets: "
+                f"{', '.join(f'shard {i}={v}' for i, v in sets.items())}. A set sealed (or a set "
+                f"overtaken) while the fan-out was running moved some shards and not others, so "
+                f"the slices were judged against two platforms. Re-run the whole gate: every "
+                f"shard then resolves the same newest sealed set.")
+
     # ── the merged log ──
     out: list[str] = []
     for index in sorted(parsed):
@@ -285,12 +317,12 @@ def main() -> int:
 
 def _log(index: int, total: int, discovered: int, gated: list[str],
          support: list[str] = (), verdict: str = "ALL GREEN.",
-         assets: list[str] = ()) -> str:
+         assets: list[str] = (), platform: str = "") -> str:
     """`assets` names the packages whose line carries `[1/1 content asset(s) served]` — gated
     or support alike, exactly where GateReport puts it (before any marker)."""
     names = ", ".join(gated) or "(none)"
     sup = ", ".join(support) or "(none)"
-    lines = [
+    lines = ([f"gate platform: set {platform}"] if platform else []) + [
         f"shard {index}/{total}: gating {len(gated)} of {discovered} discovered package(s) — "
         f"{names}; installing {len(support)} support package(s) gated on another shard: {sup}",
         "",
@@ -412,6 +444,34 @@ def self_test() -> int:
     check("a red shard folds red", merged.rstrip().endswith("GATE FAILED — 1 package(s) failed"),
           merged[-200:])
     check("a red shard is not itself a cover problem", not problems, str(problems))
+
+    # 🚨 ONE PLATFORM (Manufacturing#158). Shards that gated the same set fold green; shards that
+    # gated different sets — the one that was overtaken and re-resolved vs one that was not — are
+    # refused; a shard without the receipt beside shards that have one is refused; and a fan-out
+    # that carries no receipt at all (the pre-receipt lane) is not judged on it.
+    _, problems = fold({
+        1: _log(1, 2, 4, ["A", "C"], platform="4.0.14446"),
+        2: _log(2, 2, 4, ["B", "D"], platform="4.0.14446"),
+    }, 2)
+    check("shards on one set fold clean", not problems, str(problems))
+    merged, problems = fold({
+        1: _log(1, 2, 4, ["A", "C"], platform="4.0.14445"),
+        2: _log(2, 2, 4, ["B", "D"], platform="4.0.14446"),
+    }, 2)
+    check("shards on different sets are refused",
+          any("DIFFERENT platform sets" in p and "4.0.14445" in p and "4.0.14446" in p for p in problems), str(problems))
+    check("…and the merged verdict is red", "GATE FAILED — the shard fold refused" in merged, merged[-200:])
+    _, problems = fold({
+        1: _log(1, 2, 4, ["A", "C"], platform="4.0.14446"),
+        2: _log(2, 2, 4, ["B", "D"]),
+    }, 2)
+    check("a shard with no receipt beside shards that have one is refused",
+          any("printed no `gate platform:` receipt" in p for p in problems), str(problems))
+    _, problems = fold({
+        1: _log(1, 2, 4, ["A", "C"]),
+        2: _log(2, 2, 4, ["B", "D"]),
+    }, 2)
+    check("no receipt anywhere is not judged", not problems, str(problems))
 
     # The unsharded lane: no plan line, and that is correct — one shard IS the whole set.
     merged, problems = fold({1: SUMMARY_HEADER + "\n[PASS] A (3 node(s), 0 type(s))\nALL GREEN.\n"}, 1)

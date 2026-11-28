@@ -277,7 +277,7 @@ def decide(run: Platform, pinned: bool, ceiling: str | None, readings: dict[str,
 
 
 def verify(composed: Platform, mode: str, source: str, reading: Reading,
-           recorded: frozenset[str] | None = None) -> list[str]:
+           recorded: frozenset[str] | None = None, host_rebased: bool = False) -> list[str]:
     """After composition: the publication the seed is ABOUT to read must still be one this host can
     adopt. Returns warnings; raises Refusal when it cannot.
 
@@ -301,6 +301,14 @@ def verify(composed: Platform, mode: str, source: str, reading: Reading,
     assert rec is not None
     if rec.same_build(composed):
         return []
+    if host_rebased and compare_sets(rec.set, composed.set) == -1:
+        # The set this run resolved was OVERTAKEN while the shard waited, and the shard re-resolved to
+        # a NEWER sealed set of the same major (resolve-gate-platform.sh --follow-newer). A publication
+        # sealed on an OLDER set is exactly what any pinned host above an older seed accepts: floors
+        # only DECLINE bundles floored above the host, never below it. The address (framework
+        # identity) is still asserted by the caller, so a newer set that BROKE compatibility stays red.
+        return [f"the '{source}' publication is sealed on {rec.text()}, OLDER than the host this shard re-resolved to "
+                f"({composed.text()}) after the set this run resolved was overtaken by a newer sealed set — ordinary drift"]
     if mode == "publication":
         raise Refusal(f"the '{source}' publication was RESEALED on {rec.text()} after this shard composed its host "
                       f"on {composed.text()} — the seed and the host would be two sets. Re-run: the gate then "
@@ -553,7 +561,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     else:
         reading = Reading("no-record", None, "the publication")
     recorded = None if args.recorded_sources is None else frozenset(args.recorded_sources.split())
-    for line in verify(composed, args.mode, args.source, reading, recorded):
+    for line in verify(composed, args.mode, args.source, reading, recorded, args.host_rebased):
         print(f"::warning title=Seed vs host::{line}")
     print(f"seed '{args.source}': {reading.kind}{(' — ' + reading.record.text()) if reading.record else ''}; "
           f"host {composed.text()} (mode {args.mode}) — consistent")
@@ -699,6 +707,16 @@ def self_test() -> int:
     check("a pinned host under a NEWER seed: RED before the DECLINE wall", "NEWER than the host" in why, why)
     check("a pinned host above an older seed: fine", verify(Platform("3.1.11080", T[5], T[6]), "pin", "plugins", rec(new)) == [])
     check("legacy host, no record: fine", verify(old, "legacy", "plugins", Reading("no-record", None, "x")) == [])
+    # 🚨 OVERTAKEN-AND-RE-RESOLVED host (Manufacturing#158): a publication sealed on an OLDER set than the
+    # re-resolved host is accepted with a warning; without the flag the same pair stays RED; and a
+    # publication NEWER than the re-resolved host stays red either way.
+    newer_host = Platform("3.1.11080", T[5], T[6])
+    got = verify(newer_host, "publication", "plugins", rec(new), None, True)
+    check("a re-resolved host above an older publication: accepted, and SAID", len(got) == 1 and "ordinary drift" in got[0], got)
+    why = refused(lambda: verify(newer_host, "publication", "plugins", rec(new)))
+    check("the same pair without --host-rebased is still RED", "RESEALED" in why, why)
+    why = refused(lambda: verify(new, "publication", "plugins", rec(newer_host), None, True))
+    check("a publication NEWER than the re-resolved host is still RED", "RESEALED" in why, why)
     # A PINNED or FROZEN host recorded the upstream too (decide() returns its `recorded`), so a
     # pre-record reseal under it is a reseal. NEGATIVE CONTROL: the mode-only reading accepted it.
     d = decide(new, pinned=True, ceiling=None, readings=race)
@@ -843,6 +861,8 @@ def main() -> int:
     v.add_argument("--composed-portal", default="")
     v.add_argument("--identity", default="")
     v.add_argument("--recorded-sources", default=None)
+    v.add_argument("--host-rebased", action="store_true",
+                   help="the host re-resolved to a newer sealed set after the one this run resolved was overtaken")
     g = v.add_mutually_exclusive_group(required=True)
     g.add_argument("--index")
     g.add_argument("--record")
