@@ -269,7 +269,10 @@ public static class GitHubSyncConfiguration
                 IsSatelliteType = true,
                 ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
-                    .AddMeshDataSource(source => source.WithContentType<GitHubPullRequest>()),
+                    .AddMeshDataSource(source => source.WithContentType<GitHubPullRequest>())
+                    // The draft node's own page carries the Open-pull-request button (it used to live
+                    // only in the Sync tab's editor).
+                    .AddPullRequestViews(),
             },
             // GitHubIssue satellite ({space}/_Issue/{number}). A synced mirror of a repo issue —
             // a satellite type, so the export filter skips it (issues are never written to the repo).

@@ -523,3 +523,80 @@ public static class BuildDeliveryHold
     private static string Short(string? fingerprint)
         => fingerprint is { Length: > 12 } f ? f[..12] : fingerprint ?? "(none)";
 }
+
+/// <summary>
+/// 🚨 <b>A declined release request is not a handled one.</b> A delivery gate that answers a
+/// release request by KEEPING the last build (<see cref="BuildDeliveryHold.Settle(NodeTypeDefinition, bool, string)"/>)
+/// leaves <see cref="NodeTypeDefinition.LastReleaseRequestHandledAt"/> equal to the request with no
+/// build produced, and a request is one-shot: nothing asked again when the CAUSE of the decline
+/// moved (a source publication, a module-set change, a platform roll), so a held type stayed held
+/// for as long as nobody pressed Compile, and, never activated at boot, was never re-judged.
+///
+/// <para>This is the ONE rule for "should a held type be judged again": its <b>decline inputs</b>
+/// (<c>NodeTypeCompilationHelpers.BuildInputsToken</c> over the framework, the live module set and
+/// the type's published source versions) differ from the ones THIS process last judged it under, or
+/// this process has not judged it at all (a roll, or the first look after boot). Re-judging is
+/// cheap (the adoption pass, no Roslyn), and the inputs are claimed BEFORE the judgement is
+/// dispatched, so an unchanged input can never re-fire it: a decline that declines again settles,
+/// it does not loop.</para>
+/// </summary>
+public sealed class DeclinedReleaseLedger
+{
+    private string? judgedUnder;
+
+    /// <summary>
+    /// Whether <paramref name="def"/> is due a fresh judgement under <paramref name="liveInputs"/>:
+    /// it is held (<see cref="BuildDeliveryHold.IsHeld"/>), settled (a status in flight is judging
+    /// already), and was last judged here under different inputs. Pure: records nothing.
+    /// </summary>
+    public bool IsDue(NodeTypeDefinition? def, string liveInputs)
+        => def is { } held
+           && BuildDeliveryHold.IsHeld(held)
+           && held.CompilationStatus is not (CompilationStatus.Pending or CompilationStatus.Compiling)
+           && !string.Equals(Volatile.Read(ref judgedUnder), liveInputs, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Claims the judgement for <paramref name="liveInputs"/>: true exactly once per distinct input
+    /// set, so repeated emissions of one held record dispatch one re-judgement, not several.
+    /// </summary>
+    public bool TryClaim(string liveInputs)
+        => !string.Equals(Interlocked.Exchange(ref judgedUnder, liveInputs), liveInputs, StringComparison.Ordinal);
+
+    /// <summary>
+    /// What the release watcher should do with one emission of a type's own record: nothing, handle
+    /// the genuine request standing on it, or re-judge a held decline whose inputs moved. A genuine
+    /// request always wins and notes its inputs (so the same inputs are not judged again); a
+    /// re-judgement is claimed exactly once per distinct input set. Mutates only this ledger.
+    /// </summary>
+    /// <param name="observed">The definition this emission carries.</param>
+    /// <param name="liveInputs">The decline inputs as they are now.</param>
+    /// <param name="pastHighWater">Whether the request's trigger is strictly past this process's
+    /// commit high-water mark.</param>
+    internal ReleaseTrigger Classify(NodeTypeDefinition? observed, string liveInputs, bool pastHighWater)
+    {
+        var ordinary = pastHighWater
+            && observed?.RequestedReleaseAt is { } asked
+            && (observed.LastReleaseRequestHandledAt is null || asked > observed.LastReleaseRequestHandledAt.Value);
+        if (ordinary)
+        {
+            Note(liveInputs);
+            return ReleaseTrigger.Ordinary;
+        }
+        return IsDue(observed, liveInputs) && TryClaim(liveInputs) ? ReleaseTrigger.Rejudge : ReleaseTrigger.None;
+    }
+
+    /// <summary>Records that a judgement under <paramref name="liveInputs"/> happened by the
+    /// ordinary route (a request reached the gate), so the same inputs are not judged again.</summary>
+    public void Note(string liveInputs) => Volatile.Write(ref judgedUnder, liveInputs);
+}
+
+/// <summary>What the release watcher does with an emission, see <see cref="DeclinedReleaseLedger.Classify"/>.</summary>
+internal enum ReleaseTrigger
+{
+    /// <summary>Nothing to do.</summary>
+    None,
+    /// <summary>A genuine release request is standing.</summary>
+    Ordinary,
+    /// <summary>A held decline whose inputs moved is judged again.</summary>
+    Rejudge,
+}
