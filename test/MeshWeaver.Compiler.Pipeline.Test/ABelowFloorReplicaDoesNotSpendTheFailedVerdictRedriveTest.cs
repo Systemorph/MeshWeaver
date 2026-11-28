@@ -55,7 +55,9 @@ public class ABelowFloorReplicaDoesNotSpendTheFailedVerdictRedriveTest(ITestOutp
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     private NodeTypeDefinition Definition(MeshNode node) =>
-        node.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+        node.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } definition
+            ? definition
+            : throw new InvalidOperationException($"{node.Path} does not carry a NodeTypeDefinition");
 
     private Task<MeshNode> Settled(Func<NodeTypeDefinition, bool> predicate, string because) =>
         Mesh.GetMeshNodeStream(TypePath)
