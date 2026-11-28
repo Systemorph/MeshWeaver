@@ -100,6 +100,8 @@ public class InstanceKeyExchangeHealthLineTest(ITestOutputHelper output) : HubTe
         var arrangement = Arrange(scheduler);
 
         ResolveOnce(arrangement, scheduler, Legs.Answer).Instance.Should().NotBeNull();
+        // Forget the remembered answer, so the stall is not masked by the brief fallback.
+        arrangement.Authenticator.Invalidate(InstanceKeys.Hash(InstanceKeys.ExtractKey(arrangement.Header)!));
         ResolveOnce(arrangement, scheduler, Legs.Stall).IsUnavailable.Should().BeTrue();
 
         var reading = arrangement.Authenticator.Outcomes.Snapshot;
@@ -114,6 +116,21 @@ public class InstanceKeyExchangeHealthLineTest(ITestOutputHelper output) : HubTe
         verdict.Status.Should().Be(HealthStatus.Degraded,
             "the newest key resolution reached no verdict: the exchange is telling its callers to retry right now");
         verdict.Description.Should().Contain("1 resolved").And.Contain("1 unavailable");
+    }
+
+    [Fact]
+    public void AStallServedFromTheBriefFallback_StillDegradesTheLine()
+    {
+        var scheduler = new TestScheduler();
+        var arrangement = Arrange(scheduler);
+
+        ResolveOnce(arrangement, scheduler, Legs.Answer).Instance.Should().NotBeNull();
+        var served = ResolveOnce(arrangement, scheduler, Legs.Stall);
+        served.Instance.Should().NotBeNull("a key verified moments ago is served while the store stalls");
+
+        var reading = arrangement.Authenticator.Outcomes.Snapshot;
+        reading.Unavailable.Should().Be(1, "operators must still see the store stalling");
+        InstanceKeyExchangeHealthCheck.Evaluate(reading, scheduler.Now).Status.Should().Be(HealthStatus.Degraded);
     }
 
     [Fact]
