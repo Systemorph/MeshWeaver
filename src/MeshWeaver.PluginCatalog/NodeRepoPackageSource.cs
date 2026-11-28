@@ -132,6 +132,62 @@ public sealed class NodeRepoPackageSource : IPackageSource
     {
     }
 
+    /// <summary>The root-level declaration file a node repository commits to retire packages.</summary>
+    public const string RetiredFileName = "retired-packages.json";
+
+    /// <summary>
+    /// The packages this repository DECLARES retired (MeshWeaver#8619): the <c>retired</c> entries of
+    /// <see cref="RetiredFileName"/> at the repository root. A repository with no such file declares
+    /// nothing; a malformed entry (no id) is skipped and a malformed file declares nothing, both
+    /// logged — never a guess, because a declaration is what an instance acts on by removing an
+    /// install record. A fetch that FAULTS faults here, so a caller never reads "unreadable" as "none
+    /// retired and none to keep".
+    /// </summary>
+    /// <param name="gitRef">The ref to read at.</param>
+    public IObservable<IReadOnlyList<RetiredPackage>> ListRetired(string gitRef) =>
+        tokenProvider().SelectMany(token => NarrowFetch is { } narrow
+                ? narrow(repoUrl, gitRef, null, token, path => string.Equals(path, RetiredFileName, StringComparison.Ordinal))
+                : fetch(repoUrl, gitRef, null, token))
+            .Select(snapshot => ParseRetired(
+                snapshot.Files.FirstOrDefault(f => string.Equals(f.Path, RetiredFileName, StringComparison.Ordinal))?.Content,
+                logger));
+
+    /// <summary>Parses a <see cref="RetiredFileName"/> body. Pure; never throws.</summary>
+    /// <param name="content">The file body, or null when the repository has none.</param>
+    /// <param name="logger">Receives a malformed file or entry.</param>
+    internal static IReadOnlyList<RetiredPackage> ParseRetired(string? content, ILogger? logger = null)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return [];
+        try
+        {
+            using var doc = JsonDocument.Parse(content, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("retired", out var list)
+                || list.ValueKind != JsonValueKind.Array)
+                return [];
+            var result = new List<RetiredPackage>();
+            foreach (var entry in list.EnumerateArray())
+            {
+                string? Text(string name) =>
+                    entry.ValueKind == JsonValueKind.Object && entry.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                        ? v.GetString() : null;
+                if (Text("id") is not { Length: > 0 } id || id.Contains('/') || id.Trim() != id)
+                {
+                    logger?.LogWarning("Plugin source: a {File} entry names no valid package id and is skipped.", RetiredFileName);
+                    continue;
+                }
+                result.Add(new RetiredPackage { Id = id, Reason = Text("reason"), RetiredAt = Text("retiredAt") });
+            }
+            return result.DistinctBy(r => r.Id, StringComparer.Ordinal).OrderBy(r => r.Id, StringComparer.Ordinal).ToList();
+        }
+        catch (JsonException ex)
+        {
+            logger?.LogWarning(ex, "Plugin source: {File} is not valid JSON — it declares nothing retired.", RetiredFileName);
+            return [];
+        }
+    }
+
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
         tokenProvider().SelectMany(token => ListingFetch(gitRef, token))
