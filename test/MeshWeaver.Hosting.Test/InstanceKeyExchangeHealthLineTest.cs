@@ -101,7 +101,8 @@ public class InstanceKeyExchangeHealthLineTest(ITestOutputHelper output) : HubTe
 
         ResolveOnce(arrangement, scheduler, Legs.Answer).Instance.Should().NotBeNull();
         // Forget the remembered answer, so the stall is not masked by the brief fallback.
-        arrangement.Authenticator.Invalidate(InstanceKeys.Hash(InstanceKeys.ExtractKey(arrangement.Header)!));
+        if (InstanceKeys.ExtractKey(arrangement.Header) is { } key)
+            arrangement.Authenticator.Invalidate(InstanceKeys.Hash(key));
         ResolveOnce(arrangement, scheduler, Legs.Stall).IsUnavailable.Should().BeTrue();
 
         var reading = arrangement.Authenticator.Outcomes.Snapshot;

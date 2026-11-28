@@ -173,6 +173,47 @@ public class InstanceKeyResolutionIsolatesSlowLookupsTest(ITestOutputHelper outp
     }
 
     [Fact]
+    public void ADefinitiveRefusal_DropsTheRememberedKey_SoALaterOutageDoesNotServeIt()
+    {
+        var (auth, store, scheduler) = Arrange();
+        var (header, hash) = store.AddInstance("prod", TimeSpan.FromMilliseconds(10));
+        Run(auth, header);
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(1).Ticks);
+
+        // The store answers: the key is gone (revoked / disabled / grant removed).
+        store.Keys.Remove(hash);
+        var refused = Run(auth, header);
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(1).Ticks);
+        refused[0].Instance.Should().BeNull();
+        refused[0].IsUnavailable.Should().BeFalse();
+
+        // Then the store goes down inside the old window: the refused key must not come back.
+        store.Down = true;
+        var outage = Run(auth, header);
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(1).Ticks);
+        outage[0].Instance.Should().BeNull("a key the store refused is never served from memory");
+        outage[0].IsUnavailable.Should().BeTrue();
+    }
+
+    [Fact]
+    public void WhenTheMemoryIsFull_ANewlyVerifiedKeyIsStillRemembered()
+    {
+        var (auth, store, scheduler) = Arrange();
+        string lastHeader = "";
+        for (var i = 0; i < 1030; i++)
+        {
+            (lastHeader, _) = store.AddInstance($"inst{i}", TimeSpan.FromMilliseconds(1));
+            Run(auth, lastHeader);
+            scheduler.AdvanceBy(TimeSpan.FromMilliseconds(10).Ticks);
+        }
+
+        store.Down = true;
+        var outage = Run(auth, lastHeader);
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(1).Ticks);
+        outage[0].Instance.Should().NotBeNull("the soonest-to-expire entry makes room instead of the new key being dropped");
+    }
+
+    [Fact]
     public void AnUnreachableStore_AnswersRetryable_AndCachesNothing()
     {
         var (auth, store, scheduler) = Arrange();

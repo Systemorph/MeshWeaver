@@ -132,6 +132,11 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     /// </summary>
     internal TimeSpan VerifiedKeyTtl { get; init; } = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// A soft cap on remembered keys. Past it, expired entries go first and then the soonest to
+    /// expire, so a newly verified key is always remembered; the check is not atomic with the add,
+    /// so a burst of distinct keys can briefly exceed it by the number of concurrent verifications.
+    /// </summary>
     private const int MaxVerifiedKeys = 1024;
     private readonly ConcurrentDictionary<string, (AuthenticatedInstance Instance, DateTimeOffset Expires)> verified
         = new(StringComparer.Ordinal);
@@ -151,12 +156,16 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     private void Remember(string hash, AuthenticatedInstance instance)
     {
         var now = DeadlineScheduler.Now;
-        if (verified.Count >= MaxVerifiedKeys)
+        if (verified.Count >= MaxVerifiedKeys && !verified.ContainsKey(hash))
+        {
             foreach (var (key, entry) in verified)
                 if (entry.Expires <= now)
                     verified.TryRemove(key, out _);
-        if (verified.Count < MaxVerifiedKeys)
-            verified[hash] = (instance, now + VerifiedKeyTtl);
+            if (verified.Count >= MaxVerifiedKeys
+                && verified.OrderBy(kv => kv.Value.Expires).Select(kv => kv.Key).FirstOrDefault() is { } soonest)
+                verified.TryRemove(soonest, out _);
+        }
+        verified[hash] = (instance, now + VerifiedKeyTtl);
     }
 
     /// <summary>
@@ -496,6 +505,11 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
             {
                 if (result.Instance is { } instance)
                     Remember(hash, instance);
+                else if (!result.IsUnavailable)
+                    // A DEFINITIVE negative (key revoked, instance disabled, grant removed): the store
+                    // just refused it, so the remembered answer must not outlive that verdict and
+                    // serve the key during a later outage.
+                    verified.TryRemove(hash, out _);
             })
             .Select(result =>
                 result.IsUnavailable
