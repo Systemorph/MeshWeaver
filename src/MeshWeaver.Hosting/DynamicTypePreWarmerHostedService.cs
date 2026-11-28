@@ -833,6 +833,8 @@ public sealed class DynamicTypePreWarmerHostedService(
                     gate?.MarkComplete(
                         $"baked in {elapsed:hh\\:mm\\:ss} — compiled={Volatile.Read(ref compiled)} "
                         + $"alreadyBaked={Volatile.Read(ref alreadyBaked)}");
+                    if (gate is not null)
+                        LogErrorSummary(gate);
                     // 🚨 #3478 — THE ADMISSION EDGE. A clean sweep makes this process a full
                     // participant, and every compile stamp it held is written HERE, after the
                     // verdict rather than before it. A sweep that ended Regressed or Faulted
@@ -914,6 +916,8 @@ public sealed class DynamicTypePreWarmerHostedService(
         if (proven)
             logger.LogInformation(
                 "DynamicTypePreWarmer: the bake gate PASSED on adoption - {Detail}", gate.Detail);
+        else if (gate.Phase is BakePhase.Complete)
+            LogErrorSummary(gate);
         else
             logger.LogCritical(
                 "DynamicTypePreWarmer: REFUSING READINESS - {Detail}. This instance bakes at BUILD "
@@ -922,6 +926,29 @@ public sealed class DynamicTypePreWarmerHostedService(
                 + "bake covers them; '{AllowKey}'=true serves on an UNPROVEN adoption and says so on "
                 + "the health payload.",
                 gate.Detail, EnabledConfigKey, NodeTypeBakeGateExtensions.AllowUnprovenBakeConfigKey);
+    }
+
+    /// <summary>
+    /// 🚨 Memex#1155 — the ONE line a pod prints about the NodeTypes it could not build, once, when
+    /// its verdict is in: the count and the list, and the fact that the roll proceeds. It replaces
+    /// the readiness refusal that used to repeat on every probe and bury the pod's log. Silent when
+    /// there is nothing to say, and silent for a strict gate that REFUSES (its own critical line
+    /// already says so).
+    /// </summary>
+    private void LogErrorSummary(NodeTypeBakeGateState gate)
+    {
+        if (gate.Phase is not BakePhase.Complete)
+            return;
+        var errors = gate.ErrorTypes;
+        if (errors.Count == 0)
+            return;
+        logger.LogWarning(
+            "DynamicTypePreWarmer: {Count} NodeType(s) are at Error on this pod and the roll PROCEEDS "
+            + "(readiness is not held for a package's own failure; an earlier loadable build for this "
+            + "framework keeps serving, otherwise the type is unavailable with its CompilationError on "
+            + "the type record): {Types}",
+            errors.Count,
+            string.Join(", ", errors.Keys.OrderBy(k => k, StringComparer.Ordinal)));
     }
 
     /// <summary>
