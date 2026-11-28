@@ -1236,7 +1236,19 @@ public static class PackageInstaller
     /// <c>preInstalled</c> is <c>false</c>: the serializer omits a <c>bool</c> holding its default,
     /// which is exactly how a gated plugin root is stored. Pure.
     /// </summary>
-    internal static bool? PreInstalledOnRoot(MeshNode? root, JsonSerializerOptions options)
+    internal static bool? PreInstalledOnRoot(MeshNode? root, JsonSerializerOptions options) =>
+        PluginRootFlag(root, options, "preInstalled");
+
+    /// <summary>
+    /// The <c>planGated</c> a plugin ROOT declares (null = not a plugin root). Same shape rules as
+    /// <see cref="PreInstalledOnRoot"/>. A plan-gated package is installed everywhere but its content
+    /// follows the viewer's plan, so the Store's gating reconcile OWNS its access shape (gated policy,
+    /// child denies, plan-tier grants). Pure.
+    /// </summary>
+    internal static bool? PlanGatedOnRoot(MeshNode? root, JsonSerializerOptions options) =>
+        PluginRootFlag(root, options, "planGated");
+
+    private static bool? PluginRootFlag(MeshNode? root, JsonSerializerOptions options, string flag)
     {
         const string pluginContent = "PluginContent";
         var content = root?.Content;
@@ -1257,24 +1269,24 @@ public static class PackageInstaller
                 element = JsonSerializer.SerializeToElement(content, content.GetType(), options);
                 if (element.ValueKind != JsonValueKind.Object)
                     return null;
-                return ReadPreInstalled(element);
+                return ReadFlag(element);
         }
         if (element.ValueKind != JsonValueKind.Object
             || !element.TryGetProperty("$type", out var type)
             || type.ValueKind != JsonValueKind.String
             || !string.Equals(ShortName(type.GetString()), pluginContent, StringComparison.Ordinal))
             return null;
-        return ReadPreInstalled(element);
+        return ReadFlag(element);
 
         // A hub that had not registered the dynamic type writes a NAMESPACED discriminator; the
         // framework treats it as the same short name (ContentDiscriminator.ShortNameOf) — so here.
         static string? ShortName(string? discriminator) =>
             discriminator is null ? null : discriminator[(discriminator.LastIndexOf('.') + 1)..];
 
-        static bool ReadPreInstalled(JsonElement plugin)
+        bool ReadFlag(JsonElement plugin)
         {
             foreach (var property in plugin.EnumerateObject())
-                if (string.Equals(property.Name, "preInstalled", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(property.Name, flag, StringComparison.OrdinalIgnoreCase))
                     return property.Value.ValueKind == JsonValueKind.True;
             return false;
         }
@@ -1285,6 +1297,38 @@ public static class PackageInstaller
     /// root (<see cref="LiveDeclaration"/>).
     /// </summary>
     private static IObservable<Unit> EnsureDeclaredAccessAsDeclared(
+        IMessageHub hub, PackageManifest manifest, string partition, ILogger? logger,
+        IEnumerable<string>? installedPaths)
+    {
+        // 🚨 A PLAN-GATED PARTITION IS THE STORE'S TO SHAPE, NEVER THIS STEP'S. A package that is both
+        // `preInstalled` and `planGated` (installed everywhere, content by the viewer's plan) was read
+        // here as the pre-installed baseline: the fully-public heal rewrote `{partition}/_Policy` to
+        // PublicRead, retired the Public/Anonymous child denies, and the Store's gate (PluginGate.
+        // SeedGating, which decides from the same root) put every one back 2 s later — an endless
+        // alternation, `DataModelling/_Policy` past version 2,970 and a "gating shape is NOT STAYING"
+        // Error ~835 times a day. The decision keys on the LIVE root (the manifest in hand may predate
+        // the flag, and an install record never carries it): a root that declares planGated is left
+        // alone. An absent root (a first install) decides as before.
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return EnsureDeclaredAccessUnlessPlanGated(hub, manifest, partition, logger, installedPaths);
+        return persistence.Read(partition, hub.JsonSerializerOptions)
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .SelectMany(root =>
+            {
+                if (PlanGatedOnRoot(root, hub.JsonSerializerOptions) == true)
+                {
+                    logger?.LogDebug(
+                        "[PackageInstaller] {Id}: {Partition} is plan-gated — its access shape belongs to the "
+                        + "Store's gating reconcile, not the declared-access step", manifest.Id, partition);
+                    return Observable.Return(Unit.Default);
+                }
+                return EnsureDeclaredAccessUnlessPlanGated(hub, manifest, partition, logger, installedPaths);
+            });
+    }
+
+    private static IObservable<Unit> EnsureDeclaredAccessUnlessPlanGated(
         IMessageHub hub, PackageManifest manifest, string partition, ILogger? logger,
         IEnumerable<string>? installedPaths)
     {
