@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # resolve-gate-platform.sh --volume-root <dir> [--tester-digest <sha256:…>] [--portal-digest <sha256:…>]
-#                          [--set <3.0.0-ci.N>] [--wait-seconds <N>]
+#                          [--set <3.0.0-ci.N>] [--wait-seconds <N>] [--follow-newer]
 #
 # Decides WHERE a gate shard takes the platform from, and — when that is the CI platform volume —
 # proves the set on it is the one the caller pinned and is COMPLETE, before a single assembly is
@@ -65,6 +65,17 @@
 # polls, because the share is SMB (no inotify, and `actimeo=30` caches a negative dentry for up to
 # 30 s) — it is a wait on a condition, never a sleep for time to pass. `--set` is what makes AHEAD
 # and GONE distinguishable; without it only ARRIVING can be seen, and the other two are RED at once.
+#
+# 🚨 OVERTAKEN BY A NEWER SEALED SET IS DRIFT, NOT A DEFECT (maintainer, 2026-09-09: "We must not pin
+# anything. It must be tolerant."; Manufacturing#158). With `--follow-newer` — which the lane passes
+# ONLY for a platform it RESOLVED itself, never for a caller's pin, a freeze or a ceiling — a set that
+# is GONE or was OVERTAKEN (below the oldest kept, inside the window and absent, or passed while this
+# shard waited) is not a red when the volume serves a NEWER COMPLETE set of the SAME MAJOR (the version
+# rule: a build serves on the platform of its own major). The shard re-resolves to the newest such set,
+# gates against it, emits `rebased=true` with `rebased_from`/`rebased_to`/`tester_digest`/`portal_digest`
+# and SAYS so (::notice). Only when NO sealed set of that major is servable does it stay RED. The lane
+# records the set each shard gated in the shard's gate log and the fold REFUSES shards that disagree,
+# so a fan-out whose parts gated different platforms can never report green.
 #
 # WHAT IT DOES NOT DO: it never runs `docker`, never reaches a registry, and never writes to the
 # volume. It is pure enough to be self-tested against synthetic directories, which is the only way
@@ -366,7 +377,59 @@ number written here goes stale the first time it moves (got: $o)"
   grep -q 'had not reached the platform volume' <<<"$o" \
     || fail "the first SemVer set must rank AHEAD of the last ci set (got: $o)"
 
-  echo "resolve-gate-platform.sh self-test: OK (2 container cases, 2 volume cases, 9 refusals, 3 usage refusals, 7 wait cases, 2 notation cases)"
+  # 6. 🚨 --follow-newer: OVERTAKEN BY A NEWER SEALED SET IS DRIFT, NOT A RED (Manufacturing#158).
+  #    6a. The 5d volume (#8600 newest, #8400 oldest, caller wants #8547 — inside the window, absent)
+  #        re-resolves to #8600: exit 0, volume mode, the newer set's own paths and portal digest.
+  o="$("$self" --volume-root "$past" --tester-digest "$D1" --portal-digest "$P2" \
+       --set 3.0.0-ci.8547 --wait-seconds 0 --follow-newer 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] || fail "an overtaken set must re-resolve to the newer sealed set under --follow-newer (got: $o)"
+  grep -q '^mode=volume$' <<<"$o"              || fail "a re-resolution must serve from the volume (got: $o)"
+  grep -q '^rebased=true$' <<<"$o"             || fail "a re-resolution must say rebased=true (got: $o)"
+  grep -q '^rebased_from=3.0.0-ci.8547$' <<<"$o" || fail "a re-resolution must name the set it left (got: $o)"
+  grep -q '^set=3.0.0-ci.8600$' <<<"$o"        || fail "a re-resolution must report the NEW set (got: $o)"
+  grep -q "^tester_digest=$D2$" <<<"$o"        || fail "a re-resolution must report the new tester digest (got: $o)"
+  grep -q "^portal_digest=$P1$" <<<"$o"        || fail "a re-resolution must report the new set's own portal digest (got: $o)"
+  grep -q 'overtaken, re-resolved' <<<"$o"     || fail "a re-resolution must SAY so in the log (got: $o)"
+  grep -q '^mode=container$' <<<"$o" && fail "a re-resolution must not be a container pair miss (got: $o)"
+  #    6b. A set BELOW the oldest kept re-resolves the same way.
+  o="$("$self" --volume-root "$gone" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8001 --wait-seconds 0 --follow-newer 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && grep -q '^rebased=true$' <<<"$o" || fail "a purged set must re-resolve under --follow-newer (got: $o)"
+  #    6c. A set that is NOT overtaken is not rebased: the happy path emits rebased=false.
+  o="$("$self" --volume-root "$good" --tester-digest "$D1" --portal-digest "$P1" --set 3.0.0-ci.1 --follow-newer 2>&1)"
+  grep -q '^rebased=false$' <<<"$o" || fail "a served set must report rebased=false (got: $o)"
+  #    6d. The version rule: a newer set of ANOTHER MAJOR is not a substitute. Still RED.
+  major="$tmp/other-major"; make_set "$major" "$D2" "$P1" "4.0.9000" > /dev/null
+  o="$("$self" --volume-root "$major" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8547 --wait-seconds 0 --follow-newer 2>&1)"; rc=$?
+  [ "$rc" -ne 0 ] || fail "a newer set of another major must NOT be substituted (got: $o)"
+  grep -q '^rebased=true$' <<<"$o" && fail "no cross-major re-resolution (got: $o)"
+  #    6e. Nothing newer is servable (the volume is OLDER than the caller, AHEAD case) ⇒ stays RED.
+  older="$tmp/only-older"; make_set "$older" "$D2" "$P1" "3.0.0-ci.8400" > /dev/null
+  o="$("$self" --volume-root "$older" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8547 --wait-seconds 0 --follow-newer 2>&1)"; rc=$?
+  [ "$rc" -ne 0 ] || fail "with no newer sealed set servable the shard must stay red (got: $o)"
+  #    6f. Without the flag a pin is NEVER moved (the 5d assertion), re-checked here with a
+  #        servable newer set present.
+  o="$("$self" --volume-root "$past" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8547 --wait-seconds 0 2>&1)"; rc=$?
+  [ "$rc" -ne 0 ] || fail "a pin (no --follow-newer) must never be re-resolved (got: $o)"
+  #    6g. THE MANUFACTURING#158 SHAPE: the shard is WAITING for set #8547 (AHEAD of the volume's
+  #        #8400), and a refresh installs the NEWER #8600 instead. It must re-resolve to #8600 within
+  #        a poll, not die "was overtaken".
+  wait_root="$tmp/overtaken-while-waiting"; make_set "$wait_root" "$D3" "$P1" "3.0.0-ci.8400" > /dev/null
+  ( sleep 4; make_set "$wait_root" "$D2" "$P1" "3.0.0-ci.8600" > /dev/null ) &
+  started=$(date +%s)
+  o="$("$self" --volume-root "$wait_root" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8547 --wait-seconds 60 --follow-newer 2>&1)"; rc=$?
+  elapsed=$(( $(date +%s) - started ))
+  wait
+  [ "$rc" -eq 0 ] || fail "a set overtaken WHILE WAITING must re-resolve, not die (got: $o)"
+  grep -q '^rebased=true$' <<<"$o" && grep -q '^set=3.0.0-ci.8600$' <<<"$o" \
+    || fail "the waiting shard must end on the newer set (got: $o)"
+  [ "$elapsed" -le 40 ] || fail "the re-resolution must end the wait, not run it to the deadline (${elapsed}s)"
+
+  echo "resolve-gate-platform.sh self-test: OK (2 container cases, 2 volume cases, 9 refusals, 3 usage refusals, 7 wait cases, 2 notation cases, 7 follow-newer cases)"
   exit 0
 fi
 
@@ -374,6 +437,9 @@ VOLUME_ROOT=""
 TESTER_DIGEST=""
 PORTAL_DIGEST=""
 CALLER_SET=""
+FOLLOW_NEWER=0
+REBASED=0
+REBASED_FROM=""
 # The bound on waiting for a set that is ARRIVING or AHEAD, in seconds. It is not a guess and it is
 # not a knob to turn up when a run fails: it is the refresh's worst-case latency, and it is
 # arithmetic over values that are declared elsewhere —
@@ -397,7 +463,8 @@ while [ $# -gt 0 ]; do
     --portal-digest) PORTAL_DIGEST="${2:-}"; shift 2 ;;
     --set)           CALLER_SET="${2:-}"; shift 2 ;;
     --wait-seconds)  WAIT_SECONDS="${2:-}"; shift 2 ;;
-    *) die "unknown argument '$1' (usage: --volume-root <dir> [--tester-digest <sha256:…>] [--portal-digest <sha256:…>] [--set <3.0.0-ci.N>] [--wait-seconds <N>])" ;;
+    --follow-newer)  FOLLOW_NEWER=1; shift ;;
+    *) die "unknown argument '$1' (usage: --volume-root <dir> [--tester-digest <sha256:…>] [--portal-digest <sha256:…>] [--set <3.0.0-ci.N>] [--wait-seconds <N>] [--follow-newer])" ;;
   esac
 done
 case "$WAIT_SECONDS" in
@@ -607,6 +674,41 @@ refuse_if_marker_disagrees() {
 }
 
 CALLER_RUN="$(run_number_of "$CALLER_SET")"
+
+# 🚨 THE RE-RESOLUTION (see the header). Moves THIS shard onto the newest COMPLETE set of the caller's
+# MAJOR that is newer than the one it asked for. Returns 1 — and changes nothing — unless
+# --follow-newer was passed, the caller named a set, and such a set exists, so every `die` below
+# stays the answer for a pin, a freeze, or a volume that serves nothing newer.
+try_rebase() {
+  [ "$FOLLOW_NEWER" = 1 ] && [ -n "$CALLER_SET" ] && [ -n "$CALLER_RUN" ] || return 1
+  local want_major="${CALLER_SET%%.*}" candidate name number marker best_run="" best_dir="" best_digest=""
+  for candidate in "$VOLUME_ROOT"/sha256-*; do
+    case "$candidate" in *.tmp.*) continue ;; esac
+    [ -d "$candidate" ] && [ -f "$candidate/.complete" ] && [ -f "$candidate/platform.json" ] || continue
+    name="$(sed -n 's/.*"set"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$candidate/platform.json" 2>/dev/null | sed -n 1p)"
+    number="$(run_number_of "$name")"
+    [ -n "$number" ] && [ "$number" -gt "$CALLER_RUN" ] || continue
+    [ "${name%%.*}" = "$want_major" ] || continue
+    marker="$(tr -d '[:space:]' < "$candidate/.complete")"
+    [[ "$marker" =~ ^sha256:[0-9a-f]{64}$ ]] && [ "$candidate" = "$VOLUME_ROOT/${marker/:/-}" ] || continue
+    if [ -z "$best_run" ] || [ "$number" -gt "$best_run" ]; then
+      best_run="$number"; best_dir="$candidate"; best_digest="$marker"
+    fi
+  done
+  [ -n "$best_dir" ] || return 1
+  REBASED=1
+  REBASED_FROM="$CALLER_SET"
+  resolved="$best_digest"
+  SET_DIR="$best_dir"
+  # The newer set's OWN portal digest: the caller's pin names a pair that no longer exists here, and
+  # a stale portal pin must not turn the re-resolution into a container-mode pair miss.
+  PORTAL_DIGEST="$(sed -n 's/.*"portal-image-digest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SET_DIR/platform.json" | head -1)"
+  CALLER_SET="$(sed -n 's/.*"set"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SET_DIR/platform.json" | head -1)"
+  CALLER_RUN="$best_run"
+  echo "::notice title=Platform set overtaken, re-resolved::the set this run resolved ($REBASED_FROM) is no longer served by $REFRESH_JOB and a NEWER sealed set of the same major is: core CD #$best_run ($CALLER_SET, tester $resolved). A newer sealed set overtaking the one a run resolved is ordinary drift, not a defect. This shard gates against #$best_run and records it in its gate log; the fold refuses a run whose shards gated different sets."
+  return 0
+}
+
 SET_LABEL="${CALLER_SET:+set $CALLER_SET (core CD #$CALLER_RUN), }"
 NO_PULL="🚨 This shard does NOT fall back to 'docker pull': a gate that quietly reached the registry would hide a dead refresh job for as long as the registry answers."
 NOT_THE_DIGEST="Do NOT bump the caller's image-digest/platform-image-digest: this run resolved a set that exists and is sealed, and the pin is right."
@@ -637,6 +739,10 @@ if ! set_is_complete; then
     reason=gone
   fi
 
+  if [ "$reason" = gone ] && try_rebase; then
+    reason=rebased
+  fi
+
   if [ "$reason" = gone ]; then
     oldest="$(oldest_installed)"
     # 🚨 BELOW THE OLDEST KEPT IS GENUINELY AMBIGUOUS and the message says so rather than picking
@@ -653,14 +759,16 @@ if ! set_is_complete; then
   fi
 
   # ── the bounded wait, on the condition itself ───────────────────────────────────────────────
-  if [ "$reason" = arriving ]; then
+  if [ "$reason" = rebased ]; then
+    :  # the caller's set was GONE and a newer sealed one is already here and complete — nothing to wait for
+  elif [ "$reason" = arriving ]; then
     echo "::notice::the set for ${SET_LABEL}tester ${resolved} is INSTALLING right now (${flight:-$SET_DIR}) — waiting up to ${WAIT_SECONDS}s for its .complete. An install takes ~200 s on the share."
   else
     echo "::notice::this run resolved ${SET_LABEL}which is NEWER than the volume's newest installed set (core CD #${newest:-unknown}) — the refresh is a 10-minute CronJob and this run was triggered by the seal, so it is ahead of the volume. Waiting up to ${WAIT_SECONDS}s for it to arrive."
   fi
   started_waiting="$(date +%s)"
   deadline=$(( started_waiting + WAIT_SECONDS ))
-  while ! set_is_complete; do
+  while [ "$REBASED" = 0 ] && ! set_is_complete; do
     refuse_if_marker_disagrees
     waited=$(( $(date +%s) - started_waiting ))
     newest="$(newest_installed)"
@@ -669,6 +777,7 @@ if ! set_is_complete; then
     # ends here rather than at the deadline — the remedy is a re-run, not more patience.
     if [ -z "$flight" ] && [ ! -d "$SET_DIR" ] && [ -n "$CALLER_RUN" ] && [ -n "$newest" ] \
        && [ "$newest" -gt "$CALLER_RUN" ]; then
+      if try_rebase; then break; fi
       die "while this shard waited ${waited}s for ${SET_LABEL}tester ${resolved}, $REFRESH_JOB installed core CD #$newest instead — #$CALLER_RUN was overtaken. $KEPT $REMEDY $RERUN $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
@@ -682,7 +791,11 @@ if ! set_is_complete; then
     sleep 10
   done
   waited=$(( $(date +%s) - started_waiting ))
+  if [ "$REBASED" = 1 ]; then
+    echo "::notice::re-resolved to ${CALLER_SET} (core CD #${CALLER_RUN}), tester ${resolved}, after ${waited}s."
+  else
   echo "::notice::${SET_LABEL}tester ${resolved} became complete on the volume after ${waited}s — the shard waited for the refresh instead of failing on a digest that was merely early."
+  fi
 fi
 [ -f "$SET_DIR/app/mw-plugin-test.dll" ] \
   || die "'$SET_DIR/app' has no mw-plugin-test.dll — that directory is meant to be the TESTER image's /app, and $REFRESH_JOB asserts the same file before it writes .complete. A set that passed that assertion and lacks it now has been damaged on the share."
@@ -724,4 +837,14 @@ emit portal_app "$SET_DIR/platform-refs"
 emit digest "$resolved"
 emit set "${set_name:-unknown}"
 emit core_sha "${core_sha:-unknown}"
+emit tester_digest "$resolved"
+emit portal_digest "${portal_on_volume:-}"
+if [ "$REBASED" = 1 ]; then
+  emit rebased true
+  emit rebased_from "$REBASED_FROM"
+  emit rebased_to "${set_name:-unknown}"
+  echo "platform RE-RESOLVED: asked for $REBASED_FROM, overtaken by a newer sealed set; gating against ${set_name:-unknown}."
+else
+  emit rebased false
+fi
 echo "platform from the volume: set ${set_name:-unknown} (core ${core_sha:-unknown}) at '$SET_DIR' — app/ $(find "$SET_DIR/app" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') assemblies, platform-refs/ $(find "$SET_DIR/platform-refs" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') assemblies. No registry, no daemon, no pull."

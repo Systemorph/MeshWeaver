@@ -108,6 +108,17 @@ and every heavy leg misses the mount, falls back to pulling the image, and that 
 `the platform mount at /opt/platform holds no COMPLETE set for the run's tester digest` beside it.
 That is what held Plugins `main` red on the evening of 2026-09-13 while the freeze named `8506`.
 
+**2-bis. A set OVERTAKEN by a newer sealed set is drift, not a red (Manufacturing#158).** When the set a
+run resolved is gone from the volume (overtaken while the shard waited, inside the kept window and
+absent, or below the oldest kept) and the volume serves a NEWER complete set of the same major,
+`resolve-gate-platform --follow-newer` re-resolves the shard to that set, says so (`::notice`, the
+step summary, `rebased=true`), and gates against it. The lane passes the flag only for a platform it
+resolved itself: a caller's pin, an `MW_PLATFORM_REF` freeze and a `platform-ceiling` are never moved.
+Only when no sealed set of that major is servable does the shard stay red. Every shard writes
+`gate platform: set <set>` as the first line of its gate log and `gate-shard-merge.py` refuses a fold
+whose shards name different sets (or where only some name one), so a re-resolution can never let the
+parts of one run gate against two platforms and still report green; the remedy then is one full re-run.
+
 **2a. When the NEWEST set does not arrive, the shard log says whether the refresh is running.** A
 run triggered by a seal is ahead of the volume by design, so `resolve-gate-platform` waits (900 s)
 for the set's `.complete`. When that wait runs out, the refusal now carries the refresh's OWN last
