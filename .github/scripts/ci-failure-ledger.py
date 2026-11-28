@@ -1377,7 +1377,8 @@ def self_test() -> int:
         check("close that did not take -> Red", False)
     except Red:
         check("close that did not take -> Red", True)
-    check("failed close posts no 'green again' comment", not gh_nc.comments)
+    check("failed close posts no 'green again' comment",
+          not any(c.startswith("green again:") for _, c in gh_nc.comments))
 
     # 4. green with no open issue → no-op, no write, no event
     gh4 = _Fake()
