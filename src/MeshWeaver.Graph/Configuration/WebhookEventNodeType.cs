@@ -132,6 +132,19 @@ public static class WebhookInbox
     /// <summary>The header GitHub stamps with the delivery's GUID — the same on a redelivery of it.</summary>
     public const string GitHubDeliveryHeader = "X-GitHub-Delivery";
 
+    /// <summary>A create refused because the inbox node is already stored — typed first, the message as the fallback.</summary>
+    private static bool IsAlreadyExists(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e.Data[NodeCreationFailure.RejectionReasonKey] is NodeCreationRejectionReason.NodeAlreadyExists)
+                return true;
+            if (e.Message?.StartsWith("Node already exists", StringComparison.Ordinal) == true)
+                return true;
+        }
+        return false;
+    }
+
     /// <summary>
     /// The inbox id a VERIFIED delivery is stored under: GitHub's own delivery GUID (<see cref="GitHubDeliveryHeader"/>)
     /// in <c>N</c> form, so a redelivery of a delivery that WAS stored — and answered late, which GitHub records as
@@ -619,7 +632,7 @@ public static class WebhookInbox
                             })
                             // A redelivery of a delivery already stored: the sender needs the answer it missed, and
                             // nothing is written twice (a replay sweep is safe because of this).
-                            .Catch((Exception ex) => deliveryId is not null && AccessGrantMailBudget.IsAlreadyExists(ex)
+                            .Catch((Exception ex) => deliveryId is not null && IsAlreadyExists(ex)
                                 ? Observable.Return(new DeliveryResult(DeliveryStatus.Accepted, node.Path)
                                 {
                                     SignatureVerified = signatureVerified,
