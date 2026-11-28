@@ -1294,7 +1294,7 @@ public static class PrebuiltAssemblySeeder
             && observed.CurrentSourceFingerprint is { Length: > 0 } liveFingerprint
             && NodeTypeCompilationHelpers.CanJudgeAdoption(
                 producerFingerprint, liveFingerprint, observed.CurrentSourceVersions, sourcePaths,
-                sourceIncludes, observed.CurrentSourceIncludes)
+                sourceIncludes, observed.CurrentSourceIncludes, moduleVersion, observed.CurrentModuleVersion)
             && !string.Equals(producerFingerprint, liveFingerprint, StringComparison.Ordinal))
         {
             var verdict = ModuleVersionCompatibility.Classify(moduleVersion, observed.CurrentModuleVersion);
@@ -1361,7 +1361,7 @@ public static class PrebuiltAssemblySeeder
             && observed.CurrentSourceFingerprint is { Length: > 0 } unjudged
             && !NodeTypeCompilationHelpers.CanJudgeAdoption(
                 deferred, unjudged, observed.CurrentSourceVersions, sourcePaths,
-                sourceIncludes, observed.CurrentSourceIncludes)
+                sourceIncludes, observed.CurrentSourceIncludes, moduleVersion, observed.CurrentModuleVersion)
             && !string.Equals(deferred, unjudged, StringComparison.Ordinal))
         {
             var notYetLive = NodeTypeCompilationHelpers.SourcePathsNotYetLive(

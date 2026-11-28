@@ -1708,8 +1708,11 @@ internal static class NodeTypeCompilationHelpers
     /// nothing is dispatched off a set still being written.</para>
     ///
     /// <para><b>Its residue, also named.</b> A path DELETED upstream after the bundle was baked is
-    /// absent from the live set forever, so from here the judgement defers for as long as that
-    /// bundle stands. It is bounded by the install's own release request: that fold re-judges
+    /// absent from the live set forever. Across a module-version move that is now judged rather
+    /// than deferred (see the overload taking the module versions — the 2026-11-28
+    /// <c>Crm/Counterparty</c> measurement showed the bound below does NOT hold, because the
+    /// release's non-forced compile re-adopts the same bundle). Within one release the judgement
+    /// still defers for as long as that bundle stands. It is bounded by the install's own release request: that fold re-judges
     /// after the install completes and, on a mesh that compiles module content, an
     /// <c>IsDirty</c> record compiles the live (complete) set and replaces the adopted build; on
     /// a mesh that does not, the adopted build keeps serving as it would have as StaleAdopted —
@@ -1724,7 +1727,8 @@ internal static class NodeTypeCompilationHelpers
         NodeTypeDefinition def, IReadOnlyDictionary<string, long>? liveSources)
         => CanJudgeAdoption(
             def.AdoptedSourceFingerprint, def.CurrentSourceFingerprint, liveSources,
-            def.AdoptedSourcePaths, def.AdoptedSourceIncludes, def.CurrentSourceIncludes);
+            def.AdoptedSourcePaths, def.AdoptedSourceIncludes, def.CurrentSourceIncludes,
+            def.AdoptedModuleVersion, def.CurrentModuleVersion);
 
     /// <summary>
     /// 🚨 #4280 (second finding on #4293) — the <c>@@</c>-include paths the adopted bytes were
@@ -1855,6 +1859,43 @@ internal static class NodeTypeCompilationHelpers
         IReadOnlyCollection<string>? adoptedSourcePaths,
         IReadOnlyCollection<string>? adoptedSourceIncludes,
         IReadOnlyCollection<string>? currentSourceIncludes)
+        => CanJudgeAdoption(adoptedFingerprint, liveFingerprint, liveSources, adoptedSourcePaths,
+            adoptedSourceIncludes, currentSourceIncludes,
+            adoptedModuleVersion: null, currentModuleVersion: null);
+
+    /// <summary>
+    /// <see cref="CanJudgeAdoption(string, string, IReadOnlyDictionary{string, long}, IReadOnlyCollection{string}, IReadOnlyCollection{string}, IReadOnlyCollection{string})"/>
+    /// with the two MODULE VERSIONS as the witness that tells an ARRIVAL from a DELETION.
+    ///
+    /// <para>🚨 The #4280 path witness reads a bundle path that is absent from the live set as "the
+    /// install is still writing it". That holds only while the bundle and the live source are the
+    /// SAME release. When the live source is a strictly NEWER module release than the bundle, a
+    /// path the bundle names and the live set lacks was deleted or renamed by that newer release:
+    /// it will never land, so waiting for it deferred the judgement for as long as that bundle
+    /// stood — every release request re-adopted the old bytes as <c>AdoptedVerified</c>, nothing
+    /// compiled the live source, and a recycle re-bound the same build. Measured on the company
+    /// instance, 2026-11-28: <c>Crm/Counterparty</c> served the 4.0.10 bundle over 4.2 source
+    /// through two provisions, because 4.2 renamed two shared sources the 4.0.10 bundle names.
+    /// So across a version move the path witness is skipped and the fingerprints are judged; a
+    /// same-release race (#4280's measurement) still defers exactly as before.</para>
+    /// </summary>
+    /// <param name="adoptedFingerprint">What the producer says these bytes were built from.</param>
+    /// <param name="liveFingerprint">The owner's published live fingerprint.</param>
+    /// <param name="liveSources">The live source snapshot — the witness.</param>
+    /// <param name="adoptedSourcePaths">The paths the bundle was built from, or null (legacy).</param>
+    /// <param name="adoptedSourceIncludes">The includes the bundle was compiled with, or null.</param>
+    /// <param name="currentSourceIncludes">The includes the owner resolved as present, or null.</param>
+    /// <param name="adoptedModuleVersion">The bundle's module version, or null when unknown.</param>
+    /// <param name="currentModuleVersion">The live source's module version, or null when unknown.</param>
+    internal static bool CanJudgeAdoption(
+        string? adoptedFingerprint,
+        string? liveFingerprint,
+        IReadOnlyDictionary<string, long>? liveSources,
+        IReadOnlyCollection<string>? adoptedSourcePaths,
+        IReadOnlyCollection<string>? adoptedSourceIncludes,
+        IReadOnlyCollection<string>? currentSourceIncludes,
+        string? adoptedModuleVersion,
+        string? currentModuleVersion)
     {
         if (adoptedFingerprint is not { Length: > 0 } adopted)
             return true;
@@ -1868,8 +1909,38 @@ internal static class NodeTypeCompilationHelpers
         // it was measured? Both halves — the query-resolved paths and the include closure —
         // ordered after the equality check for the same reason the empty witness is: an honest
         // match is an honest match whatever the lists say.
-        return SourcePathsNotYetLive(adoptedSourcePaths, liveSources).Count == 0
+        return (BundleIsAnOlderRelease(adoptedModuleVersion, currentModuleVersion)
+                || SourcePathsNotYetLive(adoptedSourcePaths, liveSources).Count == 0)
                && SourceIncludesNotYetLive(adoptedSourceIncludes, currentSourceIncludes).Count == 0;
+    }
+
+    /// <summary>
+    /// Whether the live source is a strictly newer module release than the bundle — the one case in
+    /// which a bundle path absent from the live set is a DELETION by that release rather than an
+    /// arrival still in flight. Unknown on either side is not newer, so the #4280 deferral stands.
+    /// </summary>
+    internal static bool BundleIsAnOlderRelease(string? adoptedModuleVersion, string? currentModuleVersion)
+        => ReleaseCoreOf(currentModuleVersion) is { } current
+           && ReleaseCoreOf(adoptedModuleVersion) is { } adopted
+           && current.CompareTo(adopted) > 0;
+
+    /// <summary>MAJOR.MINOR.PATCH of a module version with absent components read as 0 — a source
+    /// root declares the series (<c>4.2</c>) while a bundle carries the release (<c>4.2.0</c>), and
+    /// <see cref="Version"/> alone orders <c>4.2</c> below <c>4.2.0</c>. Prerelease and build
+    /// metadata are ignored; an unparsable value is unknown (null).</summary>
+    private static (int Major, int Minor, int Patch)? ReleaseCoreOf(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return null;
+        var parts = version.Split('-', '+')[0].Split('.');
+        if (parts.Length is < 1 or > 3)
+            return null;
+        var numbers = new int[3];
+        for (var i = 0; i < parts.Length; i++)
+            if (!int.TryParse(parts[i], System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out numbers[i]))
+                return null;
+        return (numbers[0], numbers[1], numbers[2]);
     }
 
     /// <summary>
