@@ -143,12 +143,12 @@ jobs:
           # would turn "the token cannot read the org" into "the fleet is empty", which is the one
           # answer this gate must never produce (check-workflow-shell.py's `swallow` class).
           # A 5xx or a transport error is the API's, not the token's (run 46144220562: HTTP 502
-          # on a good token): retry up to 3 attempts, 5/15/45 s apart. Only 401/403/404 blame the token.
+          # on a good token): retry up to 3 attempts, 5 s and 15 s apart. Only 401/403/404 blame the token.
           err=$(mktemp)
           reachable=""
           ok=0
           code=""
-          for delay in 5 15 45; do
+          for delay in 5 15 0; do
             if reachable=$(gh api --paginate /installation/repositories \
                              --jq '.repositories[].full_name' 2>"$err"); then
               ok=1
@@ -159,9 +159,12 @@ jobs:
             case "$code" in
               401|403|404) break ;;
             esac
+            # The last attempt has no successor: delay 0 means "no wait, fall through to the report".
+            [ "$delay" -gt 0 ] || break
             echo "enumeration failed (${code:-transport error}); retrying in ${delay}s"
             sleep "$delay"
           done
+          rm -f "$err"
           if [ "$ok" -ne 1 ]; then
             case "$code" in
               401|403|404)
