@@ -479,7 +479,7 @@ var verdictToWrite = moduleCaveats.IsEmpty
     : run.Verdict with { Caveats = run.Verdict.Caveats.AddRange(moduleCaveats) };
 var fullVerdictPath = Path.GetFullPath(verdictPath);
 File.WriteAllText(
-    fullVerdictPath, JsonSerializer.Serialize(verdictToWrite, InstanceComboAssembler.Json));
+    fullVerdictPath, JsonSerializer.Serialize(verdictToWrite.BoundedForLanding(), InstanceComboAssembler.Json));
 Console.WriteLine();
 Console.WriteLine($"verdict written to '{fullVerdictPath}'.");
 Console.WriteLine(

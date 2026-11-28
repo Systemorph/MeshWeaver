@@ -186,6 +186,36 @@ public sealed record ComboVerification
     [JsonIgnore]
     public ImmutableList<ModuleVerification> FailedModules =>
         [.. Modules.Where(m => m.Outcome == ModuleVerificationOutcome.Failed)];
+
+    /// <summary>Largest text, in characters, one failure or caveat line carries to the instance.</summary>
+    public const int MaxLineLength = 2000;
+
+    /// <summary>Most failure lines one module (and most caveats the verdict) carries to the instance.</summary>
+    public const int MaxLinesPerList = 100;
+
+    /// <summary>
+    /// This verdict bounded for LANDING (MeshWeaver#4413). The gate's per-check diagnostics are
+    /// unbounded text (a Red slot printed 391,424 lines), and the instance's landing route refuses
+    /// an oversized body with HTTP 413 — so the verdict that said the candidate was Red was itself
+    /// never recorded, and the lane went red on a landing failure rather than on the finding.
+    /// Every list is cut to <see cref="MaxLinesPerList"/> lines of at most <see cref="MaxLineLength"/>
+    /// characters, and the cut SAYS how much it dropped; kind, outcome and the module set are untouched.
+    /// </summary>
+    public ComboVerification BoundedForLanding() => this with
+    {
+        Caveats = Bound(Caveats),
+        Modules = [.. Modules.Select(m => m with { Failures = Bound(m.Failures), KnownDebt = Bound(m.KnownDebt) })],
+    };
+
+    private static ImmutableList<string> Bound(ImmutableList<string> lines)
+    {
+        var kept = lines.Take(MaxLinesPerList)
+            .Select(l => l.Length <= MaxLineLength ? l : l[..MaxLineLength] + $" … [{l.Length - MaxLineLength} more characters cut]")
+            .ToList();
+        if (lines.Count > MaxLinesPerList)
+            kept.Add($"… [{lines.Count - MaxLinesPerList} more line(s) cut to keep the verdict landable]");
+        return [.. kept];
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
