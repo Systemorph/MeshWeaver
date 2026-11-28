@@ -143,6 +143,29 @@ public class ImageCanvasControlTest(ITestOutputHelper output) : HubTestBase(outp
         back.Tool.Should().Be(ImageCanvasTool.Arrow);
     }
 
+    /// <summary>
+    /// Situation: a canvas with shapes and a bound selection. Action: serialise and read it back.
+    /// Expected: the selection binding survives, and a canvas without one has none. Why: the page
+    /// reads the selected index to edit that shape's properties; a dropped binding would leave the
+    /// selection invisible to it again.
+    /// </summary>
+    [HubFact]
+    public void WithSelection_BindsTheSelectedIndex_AndSurvivesTheWire()
+    {
+        var canvas = Controls.ImageCanvas("x.png", "")
+            .WithModelSize(400, 300)
+            .WithShapes(new JsonPointerReference("annotations"), ImageCanvasTool.Select)
+            .WithSelection(new JsonPointerReference("selected"));
+        Controls.ImageCanvas("x.png", "").Selected.Should().BeNull("no selection bound unless asked for");
+
+        var host = GetHost();
+        var json = JsonSerializer.Serialize<UiControl>(canvas, host.JsonSerializerOptions);
+        json.Should().Contain("\"selected\"");
+        JsonSerializer.Deserialize<UiControl>(json, host.JsonSerializerOptions)
+            .Should().BeOfType<ImageCanvasControl>().Which
+            .Selected.Should().BeOfType<JsonPointerReference>().Which.Pointer.Should().Be("selected");
+    }
+
     [Fact]
     public void HitTest_PicksTheTopmostShape_SegmentsByDistance_BoxesByInside()
     {
