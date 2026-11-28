@@ -523,3 +523,45 @@ public static class BuildDeliveryHold
     private static string Short(string? fingerprint)
         => fingerprint is { Length: > 12 } f ? f[..12] : fingerprint ?? "(none)";
 }
+
+/// <summary>
+/// 🚨 <b>A declined release request is not a handled one.</b> A delivery gate that answers a
+/// release request by KEEPING the last build (<see cref="BuildDeliveryHold.Settle(NodeTypeDefinition, bool, string)"/>)
+/// leaves <see cref="NodeTypeDefinition.LastReleaseRequestHandledAt"/> equal to the request with no
+/// build produced, and a request is one-shot: nothing asked again when the CAUSE of the decline
+/// moved (a source publication, a module-set change, a platform roll), so a held type stayed held
+/// for as long as nobody pressed Compile, and, never activated at boot, was never re-judged.
+///
+/// <para>This is the ONE rule for "should a held type be judged again": its <b>decline inputs</b>
+/// (<c>NodeTypeCompilationHelpers.BuildInputsToken</c> over the framework, the live module set and
+/// the type's published source versions) differ from the ones THIS process last judged it under, or
+/// this process has not judged it at all (a roll, or the first look after boot). Re-judging is
+/// cheap (the adoption pass, no Roslyn), and the inputs are claimed BEFORE the judgement is
+/// dispatched, so an unchanged input can never re-fire it: a decline that declines again settles,
+/// it does not loop.</para>
+/// </summary>
+public sealed class DeclinedReleaseLedger
+{
+    private string? judgedUnder;
+
+    /// <summary>
+    /// Whether <paramref name="def"/> is due a fresh judgement under <paramref name="liveInputs"/>:
+    /// it is held (<see cref="BuildDeliveryHold.IsHeld"/>), settled (a status in flight is judging
+    /// already), and was last judged here under different inputs. Pure: records nothing.
+    /// </summary>
+    public bool IsDue(NodeTypeDefinition? def, string liveInputs)
+        => BuildDeliveryHold.IsHeld(def)
+           && def!.CompilationStatus is not (CompilationStatus.Pending or CompilationStatus.Compiling)
+           && !string.Equals(Volatile.Read(ref judgedUnder), liveInputs, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Claims the judgement for <paramref name="liveInputs"/>: true exactly once per distinct input
+    /// set, so repeated emissions of one held record dispatch one re-judgement, not several.
+    /// </summary>
+    public bool TryClaim(string liveInputs)
+        => !string.Equals(Interlocked.Exchange(ref judgedUnder, liveInputs), liveInputs, StringComparison.Ordinal);
+
+    /// <summary>Records that a judgement under <paramref name="liveInputs"/> happened by the
+    /// ordinary route (a request reached the gate), so the same inputs are not judged again.</summary>
+    public void Note(string liveInputs) => Volatile.Write(ref judgedUnder, liveInputs);
+}

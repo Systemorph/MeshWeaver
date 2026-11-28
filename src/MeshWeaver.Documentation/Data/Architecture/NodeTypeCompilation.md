@@ -3805,6 +3805,15 @@ protocol lives in the `/code` skill.
 
 ---
 
+## 🚨 A declined release request is re-judged when its cause moves
+
+A delivery gate that answers a release request by keeping the last build (`BuildDeliveryHold.Settle`, the record names the reason in `deliveryHoldReason`) does not make the request *handled* for good. A held type (`StaleAdopted` / `AdoptionRefused`) is judged again whenever the inputs its decline was formed under change: a source publication, a module-set change (a new bundle), a platform roll. The rule is `DeclinedReleaseLedger`, asked by two callers:
+
+- **The release watcher** re-judges a held record whose live inputs (`BuildInputsToken`: framework, module-set hash, published source versions) differ from the ones this process last judged it under, or that this process has not judged yet.
+- **The boot sweep** (`DynamicTypePreWarmer`) no longer counts a held type as baked; it goes through the compile watcher, whose adoption pass lifts the hold if a bundle is there now and restates it unchanged if not.
+
+It never loops: the inputs are claimed before the judgement is dispatched, so an unchanged input cannot re-fire it, and a decline that declines again settles. Re-judging costs the adoption pass, not a Roslyn compile.
+
 ## The existence probe is shared, one per NodeType
 
 `EnrichWithNodeType` starts every per-node activation with a one-shot `path:{nodeType}` probe. That probe
