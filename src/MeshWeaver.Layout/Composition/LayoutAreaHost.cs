@@ -838,8 +838,12 @@ public record LayoutAreaHost : IDisposable
         {
             var current = store?.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
                 ?.Instances.GetValueOrDefault(area);
+            // A replacement that is value-equal to the closed dialog is indistinguishable from it
+            // here: the store keeps the existing instance when an Equal control is written over it
+            // (that dedupe is the very reason a stale entry mattered), so only a DIFFERENT control
+            // is left alone. Nothing to clear is a no-op, not an empty change.
             if (store is null || !ReferenceEquals(current, closed) && !closed.Equals(current))
-                return Stream.ApplyChanges(new(store ?? new EntityStore(), [], Stream.StreamId));
+                return null;
             var context = new RenderingContext(area);
             var changes = DisposeChildAreas(store, context);
             var removed = RemoveViews(changes.Store, area);
