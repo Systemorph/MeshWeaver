@@ -80,7 +80,6 @@ public sealed class GrantSubjectsQueryProvider(IServiceProvider services) : IMes
         var mesh = services.GetRequiredService<IMeshService>();
         var hub = services.GetRequiredService<IMessageHub>();
         var logger = services.GetService<ILogger<GrantSubjectsQueryProvider>>();
-        var none = ImmutableList<MeshNode>.Empty;
         // LIVE: the decision follows the viewer's permission at the scope, so a revoked right
         // withdraws the rows (and stops the System directory read) on the same subscription.
         return hub.CheckPermissionOutcome(scope, viewer!, Permission.Delete)
@@ -98,62 +97,132 @@ public sealed class GrantSubjectsQueryProvider(IServiceProvider services) : IMes
             .Concat()
             .Select(granted => granted
                 ? Rows(mesh.Query<MeshNode>(directoryRequest.AsSystem()))
-                : Observable.Return(none))
+                : Observable.Return(Folded.Empty))
             .Switch()
-            .Scan((Previous: (ImmutableList<MeshNode>?)null, Changes: (IReadOnlyList<QueryResultChange<T>>)[]),
-                (state, rows) => (rows, Diff<T>(state.Previous, rows, parsed)))
+            .Scan((Previous: (Folded?)null, Changes: (IReadOnlyList<QueryResultChange<T>>)[]),
+                (state, folded) => (folded, Diff<T>(state.Previous, folded, parsed)))
             .SelectMany(state => state.Changes);
     }
 
     /// <summary>
-    /// A query's change feed folded into its current rows, in the order they arrived
-    /// (Initial/Reset restart, Removed drops, Added/Updated replace in place or append). Pure.
+    /// The directory read folded to its current rows PLUS what the read itself said about its own
+    /// completeness and ranking. A partial directory read (a silent provider, an incomplete
+    /// snapshot) must reach the picker as partial, never as a complete user list, and the
+    /// relevance <see cref="QueryResultChange{T}.Scores"/> must survive so the picker ranks.
     /// </summary>
-    private static IObservable<ImmutableList<MeshNode>> Rows(IObservable<QueryResultChange<MeshNode>> changes)
-        => changes.Scan(ImmutableList<MeshNode>.Empty, (rows, change) =>
+    internal sealed record Folded(
+        ImmutableList<MeshNode> Rows,
+        bool SnapshotIncomplete = false,
+        IReadOnlyList<string>? SilentProviders = null,
+        IReadOnlyList<string>? PartiallyReadPartitions = null,
+        IReadOnlyList<string>? Degradations = null,
+        ImmutableDictionary<string, double>? Scores = null)
+    {
+        public static Folded Empty { get; } = new(ImmutableList<MeshNode>.Empty);
+
+        internal bool SameMeta(Folded other)
+            => SnapshotIncomplete == other.SnapshotIncomplete
+               && (SilentProviders ?? []).SequenceEqual(other.SilentProviders ?? [])
+               && (PartiallyReadPartitions ?? []).SequenceEqual(other.PartiallyReadPartitions ?? [])
+               && (Degradations ?? []).SequenceEqual(other.Degradations ?? []);
+    }
+
+    /// <summary>
+    /// A query's change feed folded into its current rows, in the order they arrived
+    /// (Initial/Reset restart, Removed drops, Added/Updated replace in place or append), carrying
+    /// the completeness flags and scores of the frames. Pure.
+    /// </summary>
+    internal static IObservable<Folded> Rows(IObservable<QueryResultChange<MeshNode>> changes)
+        => changes.Scan(Folded.Empty, (state, change) =>
         {
-            if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-                rows = ImmutableList<MeshNode>.Empty;
+            var restart = change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset;
+            var rows = restart ? ImmutableList<MeshNode>.Empty : state.Rows;
+            var scores = restart || state.Scores is null
+                ? ImmutableDictionary<string, double>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase)
+                : state.Scores;
+            // A restart replaces what the read said about itself; a delta can only add to it.
+            var incomplete = change.SnapshotIncomplete || (!restart && state.SnapshotIncomplete);
+            var silent = Union(restart ? null : state.SilentProviders, change.SilentProviders);
+            var partial = Union(restart ? null : state.PartiallyReadPartitions, change.PartiallyReadPartitions);
+            var degraded = Union(restart ? null : state.Degradations, change.Degradations);
+
             if (change.ChangeType == QueryChangeType.Removed)
-                return rows.RemoveAll(r => change.Items.Any(i => SamePath(i, r)));
-            foreach (var item in change.Items)
             {
-                var at = rows.FindIndex(r => SamePath(r, item));
-                rows = at >= 0 ? rows.SetItem(at, item) : rows.Add(item);
+                rows = rows.RemoveAll(r => change.Items.Any(i => SamePath(i, r)));
+                foreach (var gone in change.Items)
+                    if (gone.Path is { } gonePath)
+                        scores = scores.Remove(gonePath);
             }
-            return rows;
+            else
+            {
+                for (var i = 0; i < change.Items.Count; i++)
+                {
+                    var item = change.Items[i];
+                    var at = rows.FindIndex(r => SamePath(r, item));
+                    rows = at >= 0 ? rows.SetItem(at, item) : rows.Add(item);
+                    if (change.Scores is { } sc && sc.Count == change.Items.Count && item.Path is { } path)
+                        scores = scores.SetItem(path, sc[i]);
+                }
+            }
+            return new Folded(rows, incomplete, silent, partial, degraded, scores);
         });
+
+    private static IReadOnlyList<string>? Union(IReadOnlyList<string>? a, IReadOnlyList<string>? b)
+        => (a, b) switch
+        {
+            (null, null) => null,
+            (null, _) => b,
+            (_, null) => a,
+            _ => a.Union(b, StringComparer.Ordinal).ToList(),
+        };
 
     private static bool SamePath(MeshNode a, MeshNode b)
         => string.Equals(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The first snapshot is the <c>Initial</c>; every later one the deltas against the last —
-    /// removals, additions and updates, and nothing when the rows did not change. Pure.
+    /// removals, additions and updates, and nothing when the rows and their completeness did not
+    /// change. A change in completeness alone is announced as an empty <c>Updated</c> frame
+    /// carrying the flags. Pure.
     /// </summary>
     internal static IReadOnlyList<QueryResultChange<T>> Diff<T>(
-        ImmutableList<MeshNode>? previous, ImmutableList<MeshNode> current, ParsedQuery parsed)
+        Folded? previous, Folded current, ParsedQuery parsed)
     {
         if (previous is null)
-            return [Change<T>(QueryChangeType.Initial, current, parsed)];
-        var removed = previous.Where(p => !current.Any(c => SamePath(c, p))).ToList();
-        var added = current.Where(c => !previous.Any(p => SamePath(c, p))).ToList();
-        var updated = current.Where(c => previous.Any(p => SamePath(c, p) && !ReferenceEquals(c, p) && !Equals(c, p))).ToList();
+            return [Change<T>(QueryChangeType.Initial, current.Rows, parsed, current)];
+        var removed = previous.Rows.Where(p => !current.Rows.Any(c => SamePath(c, p))).ToList();
+        var added = current.Rows.Where(c => !previous.Rows.Any(p => SamePath(c, p))).ToList();
+        var updated = current.Rows.Where(c => previous.Rows.Any(p => SamePath(c, p) && !ReferenceEquals(c, p) && !Equals(c, p))).ToList();
         var changes = ImmutableList.CreateBuilder<QueryResultChange<T>>();
-        if (removed.Count > 0) changes.Add(Change<T>(QueryChangeType.Removed, removed, parsed));
-        if (added.Count > 0) changes.Add(Change<T>(QueryChangeType.Added, added, parsed));
-        if (updated.Count > 0) changes.Add(Change<T>(QueryChangeType.Updated, updated, parsed));
+        if (removed.Count > 0) changes.Add(Change<T>(QueryChangeType.Removed, removed, parsed, current));
+        if (added.Count > 0) changes.Add(Change<T>(QueryChangeType.Added, added, parsed, current));
+        if (updated.Count > 0) changes.Add(Change<T>(QueryChangeType.Updated, updated, parsed, current));
+        if (changes.Count == 0 && !previous.SameMeta(current))
+            changes.Add(Change<T>(QueryChangeType.Updated, [], parsed, current));
         return changes.ToImmutable();
     }
 
-    private static QueryResultChange<T> Change<T>(QueryChangeType type, IEnumerable<MeshNode> nodes, ParsedQuery parsed) =>
-        new()
+    private static QueryResultChange<T> Change<T>(
+        QueryChangeType type, IEnumerable<MeshNode> nodes, ParsedQuery parsed, Folded state)
+    {
+        var items = nodes.ToList();
+        IReadOnlyList<double>? scores = null;
+        if (state.Scores is { Count: > 0 } map && items.Count > 0
+            && items.Any(n => n.Path is { } p && map.ContainsKey(p)))
+            scores = items.Select(n => n.Path is { } p && map.TryGetValue(p, out var v) ? v : 0d).ToList();
+        return new QueryResultChange<T>
         {
             ChangeType = type,
-            Items = nodes.Cast<T>().ToList(),
+            Items = items.Cast<T>().ToList(),
             Query = parsed,
             Timestamp = DateTimeOffset.UtcNow,
+            Scores = scores,
+            SnapshotIncomplete = state.SnapshotIncomplete,
+            SilentProviders = state.SilentProviders,
+            PartiallyReadPartitions = state.PartiallyReadPartitions,
+            Degradations = state.Degradations,
         };
+    }
 
     /// <inheritdoc />
     public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
