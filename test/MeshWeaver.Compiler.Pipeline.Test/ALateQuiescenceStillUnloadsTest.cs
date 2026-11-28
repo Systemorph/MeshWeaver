@@ -56,19 +56,8 @@ public sealed class ALateQuiescenceStillUnloadsTest : IDisposable
         using var contexts = new ModuleContexts().Attach(unloads, log);
         var unloading = new AsyncSubject<Unit>();
 
-        var (lease, retire) = InstallSwapAndRetireUnderLease(contexts, unloading);
-        try
-        {
-            (await retire.Timeout(Wait).Await(ct)).Should().BeFalse(
-                "the lease is still held when the budget runs out, so the unload has not started yet");
-            log.Entries.Should().Contain(e => e.Level == LogLevel.Warning && e.Message.Contains(Holder),
-                "the budget reports the generation still in use, naming its holder");
-            unloads.Faults.Should().BeEmpty("a generation still in use at the budget is not given up");
-        }
-        finally
-        {
-            lease.Dispose(); // the query leg ends — after the budget
-        }
+        var released = HoldTheLeaseAcrossTheBudgetThenRelease(contexts, unloading, log, unloads);
+        await released.Await(ct);
 
         await unloading.Should().Within(Wait).Emit(
             "the release of the last lease drives the unload, however late it comes", cancellationToken: ct);
@@ -113,6 +102,60 @@ public sealed class ALateQuiescenceStillUnloadsTest : IDisposable
     }
 
     // ───────────────────────────────────────────── helpers
+
+    /// <summary>
+    /// Installs the swap, holds the lease past the budget, asserts what the budget reports, and releases the
+    /// lease, all in a frame of its OWN that is gone when it returns.
+    ///
+    /// It is deliberately NOT <c>async</c>. In a Debug build (the default of a local <c>dotnet test</c>) the
+    /// C# compiler hoists every local and every await temporary of an async method into its state machine,
+    /// which lives until the test ends: the retirement's observable (a closure over the generation) and the
+    /// lease (over its context) stayed rooted while the drain waited for the context to be collected, so the
+    /// generation was reported RETAINED on every Debug run and never in Release, where the JIT ends a local's
+    /// lifetime at its last use. It was never a timing: the wait for the unload is the <c>Unloading</c> event
+    /// and the wait for the collection is the drain's own.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private IObservable<Unit> HoldTheLeaseAcrossTheBudgetThenRelease(
+        ModuleContexts contexts, AsyncSubject<Unit> unloading, RecordingLogger log, CollectibleContextUnloads unloads)
+    {
+        var released = new AsyncSubject<Unit>();
+        var (lease, retire) = InstallSwapAndRetireUnderLease(contexts, unloading);
+        // The generation-touching continuation lives in this subscription, not in the caller's state machine:
+        // it ends (and is dropped) with the first report, and `released` references nothing of the generation.
+        retire.Take(1).Subscribe(
+            stillHeld =>
+            {
+                try
+                {
+                    stillHeld.Should().BeFalse(
+                        "the lease is still held when the budget runs out, so the unload has not started yet");
+                    log.Entries.Should().Contain(e => e.Level == LogLevel.Warning && e.Message.Contains(Holder),
+                        "the budget reports the generation still in use, naming its holder");
+                    unloads.Faults.Should().BeEmpty("a generation still in use at the budget is not given up");
+                    lease.Dispose(); // the query leg ends, after the budget
+                    released.OnNext(Unit.Default);
+                    released.OnCompleted();
+                }
+                catch (Exception e)
+                {
+                    lease.Dispose();
+                    released.OnError(e);
+                }
+            },
+            e =>
+            {
+                lease.Dispose();
+                released.OnError(e);
+            },
+            () =>
+            {
+                lease.Dispose();
+                released.OnCompleted();
+            });
+        // Whatever ends the wait (timeout, fault, cancellation), the lease and this subscription end with it.
+        return released.Timeout(Wait).Finally(lease.Dispose);
+    }
 
     // Not inlined, so no frame of the test roots the retired generation's context or assembly.
     [MethodImpl(MethodImplOptions.NoInlining)]

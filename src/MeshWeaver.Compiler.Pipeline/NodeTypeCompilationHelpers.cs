@@ -2828,6 +2828,7 @@ internal static class NodeTypeCompilationHelpers
         // say about the field. #4280 — the include list, likewise.
         if (!pendingStamp
             && !snapshotMoved
+            && !ContradictsLiveSource(def, fingerprint)
             && (fingerprint is null
                 || string.Equals(def.CurrentSourceFingerprint, fingerprint, StringComparison.Ordinal))
             && (includes is null
@@ -2857,9 +2858,31 @@ internal static class NodeTypeCompilationHelpers
         // standing for the next conclusive publication (the #4208 deferral, one cause further).
         if (pendingStamp && !(inconclusiveMove && def.AdoptedSourceFingerprint is { Length: > 0 }))
             updated = applyStamp(updated, snapshot);
+        else if (!pendingStamp && ContradictsLiveSource(def, fingerprint))
+        {
+            // 🚨 An adoption that was VERIFIED against an earlier live fingerprint, and whose live
+            // fingerprint has now moved (a conclusive publication over the SAME snapshot, or a
+            // verdict that was reached against a stale pairing) reads AdoptedVerified over bytes
+            // the producer built from other sources, IsDirty=false, and every release request is
+            // "satisfied by the existing current build" — the type serves old code forever and a
+            // recycle re-binds the same record. Re-judge it through the one three-way: the
+            // mismatch becomes StaleAdopted / AdoptionRefused and the live source is compiled.
+            updated = applyStamp(updated, snapshot);
+        }
 
         return updated;
     }
+
+    /// <summary>
+    /// Whether <paramref name="def"/> claims <see cref="BuildProvenance.AdoptedVerified"/> while the
+    /// producer's fingerprint differs from the CONCLUSIVE live <paramref name="liveFingerprint"/>
+    /// (falling back to the record's own) — a verification the live source no longer supports.
+    /// </summary>
+    internal static bool ContradictsLiveSource(NodeTypeDefinition def, string? liveFingerprint = null)
+        => def.BuildProvenance is BuildProvenance.AdoptedVerified
+           && def.AdoptedSourceFingerprint is { Length: > 0 } adopted
+           && (liveFingerprint ?? def.CurrentSourceFingerprint) is { Length: > 0 } live
+           && !string.Equals(adopted, live, StringComparison.Ordinal);
 
     /// <summary>
     /// The module version of the source this mesh holds for <paramref name="nodeTypePath"/>'s
@@ -3238,6 +3261,7 @@ internal static class NodeTypeCompilationHelpers
                             && snapshot.Established
                             && def.CompilationStatus is CompilationStatus.Ok
                             && !def.IsDirty
+                            && !ContradictsLiveSource(def)
                             && HasUsableBuild(curr, def, GuardsOf(hub)))
                         {
                             logger?.LogInformation(
@@ -4108,6 +4132,11 @@ internal static class NodeTypeCompilationHelpers
             {
                 var definition = current.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger);
                 var covered = registry.StampSuperseding(hubPath, current.Version) is not null
+                              // By IDENTITY too: the adoption's own write and any bookkeeping after it
+                              // move the node past the version the adoption observed, and a write
+                              // composed from a pre-adoption read can put the old coordinates back —
+                              // none of which un-adopts the build this process installed.
+                              || registry.StampNaming(hubPath, definition, FrameworkVersion) is not null
                               || (definition is { CompilationStatus: CompilationStatus.Ok }
                                   && HasUsableBuild(current, definition, guards));
                 if (covered)
