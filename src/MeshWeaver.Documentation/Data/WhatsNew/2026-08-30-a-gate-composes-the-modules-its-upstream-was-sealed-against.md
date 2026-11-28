@@ -18,7 +18,7 @@ changes the bytes.
 The moment those two disagreed, every gate in the fleet declined every prebuilt assembly it
 installed (`dependency record mismatch — built against mvid:…, live is mvid:…`), compiled the
 sources itself instead, and then failed its own postcondition for having judged bytes that will not
-ship. Reinsurance, SocialMedia, Crm, Manufacturing and Education were red at the same time, and
+ship. Reinsurance, SocialMedia, Manufacturing and Education were red at the same time, and
 none of them had changed anything.
 
 A publication now travels with the module bundles its bake composed, listed in their own index that

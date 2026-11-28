@@ -113,7 +113,7 @@ of this lane were shorter than the unit they were billed in — measured 2026-09
 MeshWeaver.Plugins: 4,975 sampled `Module bundles / Module bundle` legs at a **median of 1.1 min**
 (p90 8.4), 1,385 `Module bundles` parent legs at 1.1 min, 2,935 `Module tests` legs at 4.0 min (p90
 8.2); whole-minute rounding on the sub-minute legs was ≈12 % of Plugins' bill (~4,700 billed
-minutes a day) and 25–40 % in Crm / Reinsurance / SocialMedia. So `pack` and `tests` now expand
+minutes a day) and 25–40 % in Reinsurance / SocialMedia. So `pack` and `tests` now expand
 **one leg per batch** of `batch-size` modules (default 6, hard cap 10) — `select` cuts the
 selection deterministically (sorted by module name, striped over ⌈n/N⌉ legs so an alphabetical
 family such as `MeshWeaver.AI.*` is spread rather than stacked; ≤N modules is one leg, a
@@ -840,7 +840,7 @@ keeps the supersede model in the next section.
    included files differ ships bytes every adopter declines (`DECLINED before writing (#2813)`): a
    portal compiles them at boot, and a satellite gate that installs the publication fails
    `bake consumption`. Measured on the `plugins` publication of 2026-10-17: `Hosting` carried, `Store`
-   fresh, and every Reinsurance, Manufacturing and Crm gate red on `Hosting/InstanceAction`,
+   fresh, and every Reinsurance and Manufacturing gate red on `Hosting/InstanceAction`,
    `Hosting/ApprovalInbox` and `Hosting/InstanceRequest`. `withhold --content` therefore keeps such a
    pair on one source set — a fresh package whose included files moved under a carried dependent waits
    too (carried at the build that dependent was compiled against), and a fresh dependent over a

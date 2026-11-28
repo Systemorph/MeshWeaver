@@ -246,7 +246,7 @@ publishing:**
    against the actual current state of its dependencies rather than whatever a registry last
    happened to serve.
 2. **Everything that depends on this repo's targets is built** — the downstream closure, **across
-   repos**. A change to core builds Plugins, Reinsurance, Education, SocialMedia, Crm and
+   repos**. A change to core builds Plugins, Reinsurance, Education, SocialMedia and
    Manufacturing, because they are what depends on it.
 3. **It ends by publishing a new package version.**
 

@@ -5119,7 +5119,7 @@ jobs:
   # ────────── SATELLITE COMPATIBILITY: every satellite's NodeTypes against THIS set ──────────
   # 🚨 The per-build counterweight to the DAILY rebuild (maintainer decision, 2026-09-12). The fleet
   # assumes the platform is backwards compatible within a MAJOR, so the satellites (SocialMedia,
-  # Crm, Reinsurance, Education, Manufacturing) rebuild ONCE A
+  # Reinsurance, Education, Manufacturing) rebuild ONCE A
   # DAY, not per platform build. That removes the per-build wave's cost — and with it the only
   # per-build evidence that a core merge did not break them. Without something here a break is
   # found at 03:00 by the daily run, or on a portal at self-update, hours after the merge that

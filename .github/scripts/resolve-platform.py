@@ -4,7 +4,7 @@
 WHY THIS LIVES IN CORE (maintainer rule, 2026-09-12: "for compile always find latest package of
 platform and plugins")
 -----------------------------------------------------------------------------------------------
-Every satellite (MeshWeaver.Plugins / .Education / .Reinsurance / .Crm / .Manufacturing /
+Every satellite (MeshWeaver.Plugins / .Education / .Reinsurance / .Manufacturing /
 .SocialMedia) carries a copy of this resolver and runs it in its own `platform-ref` job and again,
 as a FRESHNESS check, in the first step of every normal consumer job — so a "re-run failed jobs"
 tests the newest sealed packages, not the hours-old outputs of a job GitHub did not re-run
