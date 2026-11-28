@@ -232,12 +232,30 @@ public static class PluginRegistryPayloads
     /// (#4097). An old consumer deserializes only <c>packages</c> and ignores the sibling; an old
     /// registry never writes it and the consumer reads an empty list — additive both ways.</summary>
     public static string List(IReadOnlyList<PackageManifest> packages, IReadOnlyList<PlanTierRefusal>? refused = null) =>
-        refused is { Count: > 0 }
-            ? JsonSerializer.Serialize(new { packages, refused }, Json)
-            // Nothing refused ⇒ the member is not written at all — the pre-#4097 bytes exactly.
-            : JsonSerializer.Serialize(new { packages }, Json);
+        List(packages, refused, null);
 
-    /// <summary>Parses the list-catalog response <see cref="List"/> wrote.</summary>
+    /// <summary>
+    /// <see cref="List(IReadOnlyList{PackageManifest}, IReadOnlyList{PlanTierRefusal})"/> plus the
+    /// packages the registry DECLARES retired (<c>retired: [RetiredPackage…]</c>, MeshWeaver#8619).
+    /// Nothing retired ⇒ the member is not written at all, so the bytes are the pre-#8619 ones; an old
+    /// consumer ignores the sibling and an old registry never writes it — additive both ways.
+    /// </summary>
+    /// <param name="packages">The catalog.</param>
+    /// <param name="refused">The plan-tier refusals, or null.</param>
+    /// <param name="retired">The retirements the registry declares, or null.</param>
+    public static string List(
+        IReadOnlyList<PackageManifest> packages, IReadOnlyList<PlanTierRefusal>? refused,
+        IReadOnlyList<RetiredPackage>? retired) =>
+        (refused is { Count: > 0 }, retired is { Count: > 0 }) switch
+        {
+            (true, true) => JsonSerializer.Serialize(new { packages, refused, retired }, Json),
+            (true, false) => JsonSerializer.Serialize(new { packages, refused }, Json),
+            (false, true) => JsonSerializer.Serialize(new { packages, retired }, Json),
+            // Nothing refused or retired ⇒ neither member is written — the pre-#4097 bytes exactly.
+            _ => JsonSerializer.Serialize(new { packages }, Json),
+        };
+
+    /// <summary>Parses the list-catalog response the <c>List</c> overloads wrote.</summary>
     public static RegistryListing ParseList(string json)
     {
         var parsed = JsonSerializer.Deserialize<ListResponse>(json, Json);
@@ -245,11 +263,13 @@ public static class PluginRegistryPayloads
         {
             Packages = parsed?.Packages ?? [],
             Refused = parsed?.Refused ?? [],
+            Retired = parsed?.Retired ?? [],
         };
     }
 
     private sealed record ListResponse(
-        IReadOnlyList<PackageManifest>? Packages, IReadOnlyList<PlanTierRefusal>? Refused);
+        IReadOnlyList<PackageManifest>? Packages, IReadOnlyList<PlanTierRefusal>? Refused,
+        IReadOnlyList<RetiredPackage>? Retired);
 
     /// <summary>Serializes the fetch-files response: <c>{ files: [PackageFile…] }</c>.</summary>
     public static string Files(IReadOnlyList<PackageFile> files) =>
@@ -297,6 +317,34 @@ public sealed record RegistryListing
     /// <summary>The pre-installed packages the registry declares in this instance's default set
     /// whose tier the instance's plan does not cover. Empty from a registry that predates #4097.</summary>
     public IReadOnlyList<PlanTierRefusal> Refused { get; init; } = [];
+
+    /// <summary>
+    /// The packages the registry explicitly DECLARES retired (MeshWeaver#8619) — the only proof of
+    /// retirement a listing carries. A package merely missing from <see cref="Packages"/> is NOT
+    /// retired (an outage, a partial listing, an ungranted source all look the same); only an entry
+    /// here is. Empty from a registry that predates the declaration.
+    /// </summary>
+    public IReadOnlyList<RetiredPackage> Retired { get; init; } = [];
+}
+
+/// <summary>
+/// A package a registry source declares retired: committed content in the source's repository
+/// (<c>retired-packages.json</c>), served beside the listing (MeshWeaver#8619,
+/// <c>Doc/Architecture/RetiredPackageConvergence</c>).
+/// </summary>
+public sealed record RetiredPackage
+{
+    /// <summary>The package id (also the partition it installed into).</summary>
+    public string Id { get; init; } = "";
+
+    /// <summary>The source that declared it; stamped by the registry's merge, as for packages.</summary>
+    public string? Source { get; init; }
+
+    /// <summary>Why it was retired, in the declaration's own words.</summary>
+    public string? Reason { get; init; }
+
+    /// <summary>When it was retired (an ISO date), as declared.</summary>
+    public string? RetiredAt { get; init; }
 }
 
 /// <summary>

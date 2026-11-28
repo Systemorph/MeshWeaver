@@ -925,6 +925,21 @@ public interface IPackageSource
     /// <param name="gitRef">The ref this source publishes (the registry's configured ref).</param>
     /// <returns>One value: whether the commit is reachable from the ref.</returns>
     IObservable<bool> PublishesCommit(string commit, string gitRef) => Observable.Return(false);
+
+    /// <summary>
+    /// The packages this source DECLARES retired at <paramref name="gitRef"/> (MeshWeaver#8619,
+    /// <c>Doc/Architecture/RetiredPackageConvergence</c>) — an explicit declaration committed beside
+    /// the packages (<c>retired-packages.json</c> at the repository root), never inferred from a
+    /// package being absent from <see cref="ListPackages"/>.
+    ///
+    /// <para>The default answers none: a source that declares nothing retires nothing, which is the
+    /// safe direction (an absent declaration is never a removal). A decorator that forwards to a
+    /// source with a declaration must forward this too.</para>
+    /// </summary>
+    /// <param name="gitRef">The ref to read at.</param>
+    /// <returns>The declared retirements; empty when none.</returns>
+    IObservable<IReadOnlyList<RetiredPackage>> ListRetired(string gitRef) =>
+        Observable.Return<IReadOnlyList<RetiredPackage>>([]);
 }
 
 /// <summary>

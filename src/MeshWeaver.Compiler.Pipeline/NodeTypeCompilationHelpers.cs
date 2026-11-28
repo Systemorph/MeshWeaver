@@ -903,6 +903,10 @@ internal static class NodeTypeCompilationHelpers
                         // compiles, as this mesh did before the gate existed.
                         var pendingDefinition = pendingNode!.ContentAs<NodeTypeDefinition>(
                             hub.JsonSerializerOptions, logger);
+                        // 🚨 #8619 — a package the REGISTRY proved retired is not compiled, adopted or parked
+                        // with an Error: its types settle quietly (one Information per partition per boot).
+                        if (pendingDefinition is not null && SkipRetired())
+                            return;
                         var offeredByBundle = Volatile.Read(ref offered) == 1;
                         // 🚨 #6930 / #7015 — owner decision: when the offer discovery was INCOMPLETE, a
                         // type with NO adoption history in a partition with NO sync source is parked —
@@ -951,10 +955,23 @@ internal static class NodeTypeCompilationHelpers
                                         Installed: installed is null
                                             ? (bool?)null
                                             : installed.Contains(PartitionOf(hubPath)))))
+                            // 🚨 #8619 boot race: a type about to be judged UNTRACKED waits (bounded) for the
+                            // registry listing this boot announced, so its retired declaration is in the
+                            // ledger before the gate decides to park. No listing expected => no wait.
+                            .SelectMany(answer => !answer.Tracked
+                                    && hub.ServiceProvider.GetService<MeshWeaver.Graph.IRetiredPackages>() is { AwaitingListing: true } awaited
+                                ? awaited.WhenListed.Timeout(RetiredListingWait)
+                                    .Catch((TimeoutException _) => Observable.Return(Unit.Default))
+                                    .Take(1).Select(_ => answer)
+                                : Observable.Return(answer))
                             .Finally(() => onDemandAdoptionSubs.Remove(tracking))
                             .Subscribe(
                                 answer =>
                                 {
+                                    // Re-asked here: the registry's listing may have been read while
+                                    // the adoption wait above ran (#8619).
+                                    if (SkipRetired())
+                                        return;
                                     if (answer.Tracked)
                                     {
                                         Dispatch();
@@ -1026,6 +1043,29 @@ internal static class NodeTypeCompilationHelpers
                                     Dispatch();
                                 });
                         return;
+
+                        // #8619 — true when the registry's retired declaration covers this type's partition:
+                        // the type is settled WITHOUT Roslyn, a park or an Error log. The reason names the
+                        // retirement; the ONE Information per partition per boot says so.
+                        bool SkipRetired()
+                        {
+                            var ledger = hub.ServiceProvider.GetService<MeshWeaver.Graph.IRetiredPackages>();
+                            var partition = PartitionOf(hubPath);
+                            if (ledger?.For(partition) is not { } retired)
+                                return false;
+                            if (ledger.FirstSighting(partition))
+                                logger?.LogInformation(
+                                    "Compile watcher: package {Package} of source {Source} is RETIRED by the registry "
+                                    + "({Reason}) — its types (first seen: {HubPath}) are neither compiled nor adopted "
+                                    + "and are not parked with an Error. Its install record is removed by the boot "
+                                    + "retirement pass; the partition's data stays (MeshWeaver#8619).",
+                                    retired.PackageId, retired.Source,
+                                    string.IsNullOrWhiteSpace(retired.Reason) ? "no reason stated" : retired.Reason, hubPath);
+                            SettleAsError(
+                                $"The package '{retired.PackageId}' is retired by the registry; this type is not compiled.",
+                                formedUnderLiveInputs: true);
+                            return true;
+                        }
 
                         void Dispatch()
                         {
@@ -4080,6 +4120,10 @@ internal static class NodeTypeCompilationHelpers
     /// judges a type anyway (#8440). Generous: a roll pod is not ready while the pass runs, and a
     /// type left Pending a little longer costs nothing, while a park written before the pass
     /// adopted the type costs the whole roll. A pass that never releases costs this delay once.</summary>
+    /// <summary>How long the untracked-module gate waits for the boot's registry listing before it judges
+    /// anyway (#8619). A listing that never answers costs a type that would park one delay, once.</summary>
+    internal static readonly TimeSpan RetiredListingWait = TimeSpan.FromSeconds(90);
+
     internal static readonly TimeSpan BootSeedingWaitBudget = TimeSpan.FromMinutes(10);
 
     /// <summary>

@@ -123,6 +123,11 @@ internal static class InstallOrigin
         // Forwarded for the same reason: the default establishes no ancestry (#6718).
         public IObservable<bool> PublishesCommit(string commit, string gitRef) =>
             inner.PublishesCommit(commit, gitRef);
+
+        // Forwarded: the default declares nothing retired, which would silently drop the registry's
+        // own declaration (#8619).
+        public IObservable<IReadOnlyList<RetiredPackage>> ListRetired(string gitRef) =>
+            inner.ListRetired(gitRef);
     }
 }
 
