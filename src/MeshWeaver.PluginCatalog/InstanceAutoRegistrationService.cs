@@ -407,6 +407,12 @@ public sealed class InstanceAutoRegistrationService(
     /// atomically, never mutated.</summary>
     private ImmutableHashSet<string> heldSources = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>The retirements this process's SUCCESSFUL registry listings proved, by source
+    /// (MeshWeaver#8619). A source that failed, was held or was never listed has no entry: an absent
+    /// listing is not a removal.</summary>
+    private ImmutableDictionary<string, ImmutableList<RetiredPackageDeclaration>> provenRetirements =
+        ImmutableDictionary.Create<string, ImmutableList<RetiredPackageDeclaration>>(StringComparer.OrdinalIgnoreCase);
+
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -1255,7 +1261,13 @@ public sealed class InstanceAutoRegistrationService(
         // phase 1 of the one uninstall request — before the install selection, which excludes the
         // same packages. Never faults, so a retire that cannot run never withholds the install.
         return composition.SelectMany(composed => DeclaredDisabledRetirement.Retire(hub, composed, logger)
-            .SelectMany(_ => InstallSelection(options, wanted, baseline, defaultApps, composed, authorizing)));
+            .SelectMany(_ => InstallSelection(options, wanted, baseline, defaultApps, composed, authorizing)
+                // 🚨 AFTER the listing the selection read: a package the registry PROVES retired
+                // (its explicit `retired` set, MeshWeaver#8619) loses its install record through phase 1
+                // of the one uninstall request. Never faults, never withholds the install summary.
+                .SelectMany(summary => RetiredPackageConvergence
+                    .Retire(hub, [.. Volatile.Read(ref provenRetirements).Values.SelectMany(v => v)], logger)
+                    .Select(_ => summary))));
     }
 
     /// <summary>The environment's composition, read ONCE off the live flag surface — the reading the
@@ -2327,7 +2339,14 @@ public sealed class InstanceAutoRegistrationService(
             logger.LogInformation(
                 "[DefaultInstall] {Name} is listed and installed at {Ref}, not '{Configured}' — {Reason}",
                 source.Name, source.GitRef, configured.GitRef, proven.Reason);
-        return ListWithRefusals(source)
+        return ListWithRefusals(source, listing =>
+            {
+                // Only a listing that ANSWERED reaches here; a faulted one goes to the Catch below and
+                // proves nothing.
+                var proven = RetiredPackageConvergence.Declare(hub, source.Name, listing, logger);
+                ImmutableInterlocked.Update(ref provenRetirements,
+                    static (map, arg) => map.SetItem(arg.Name, arg.Proven), (source.Name, Proven: proven));
+            })
             .Take(1)
             // 🚨 Stamp the source name HERE, not only in the registry's HTTP merge. Source-
             // scoped matching reads PackageManifest.Source, and until now only
@@ -2455,9 +2474,10 @@ public sealed class InstanceAutoRegistrationService(
     /// and is selected like the pre-installed package it is, so that the pass SKIPS it with the
     /// typed reason and records it, instead of never learning the package exists.
     /// </summary>
-    private static IObservable<IReadOnlyList<PackageManifest>> ListWithRefusals(ConfiguredPackageSource source) =>
+    private static IObservable<IReadOnlyList<PackageManifest>> ListWithRefusals(
+        ConfiguredPackageSource source, Action<RegistryListing> onListed) =>
         source.Source is RegistryPackageSource registry
-            ? registry.ListCatalog(source.GitRef).Select(listing => (IReadOnlyList<PackageManifest>)listing.Packages
+            ? registry.ListCatalog(source.GitRef).Do(onListed).Select(listing => (IReadOnlyList<PackageManifest>)listing.Packages
                 .Concat(listing.Refused
                     .Where(r => !listing.Packages.Any(p => string.Equals(p.Id, r.PackageId, StringComparison.Ordinal)))
                     .Select(r => PackageManifest.FromRefusal(r, source.Name)))

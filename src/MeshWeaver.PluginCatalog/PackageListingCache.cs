@@ -425,6 +425,20 @@ public sealed class PackageListingCache : IDisposable
         // would never honour a consumer's snapshot token (#6718).
         public IObservable<bool> PublishesCommit(string commit, string gitRef) =>
             inner.PublishesCommit(commit, gitRef);
+
+        // The retired declaration rides the SAME stale-while-revalidate cache as the listing — under
+        // its own key format, as manifests carrying (id, reason, date) — so a registry answering
+        // every instance's poll reads the declaration file once per revalidation, not once per
+        // request (#8619). A faulted read serves the last good answer, as the listing does.
+        public IObservable<IReadOnlyList<RetiredPackage>> ListRetired(string gitRef) =>
+            cache.Get(
+                    new PackageListingKey(repoUrl, subdir, format + "#retired", gitRef),
+                    () => inner.ListRetired(gitRef).Select(retired => (IReadOnlyList<PackageManifest>)retired
+                        .Select(r => new PackageManifest { Id = r.Id, Description = r.Reason, Version = r.RetiredAt })
+                        .ToList()))
+                .Select(rows => (IReadOnlyList<RetiredPackage>)rows
+                    .Select(m => new RetiredPackage { Id = m.Id, Reason = m.Description, RetiredAt = m.Version })
+                    .ToList());
     }
 }
 

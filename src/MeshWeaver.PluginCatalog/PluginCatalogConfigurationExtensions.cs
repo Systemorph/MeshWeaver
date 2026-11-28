@@ -168,6 +168,9 @@ public static class PluginCatalogConfigurationExtensions
                 // They are ONE service because phase 2 needs the key phase 1 mints; two hosted
                 // services would race each other over the same partitions. Same two-registration
                 // idiom as the watcher — the IHostedService forward is what STARTS it.
+                // What the registry PROVED retired, read by the compile control plane so a retired
+                // package's types are skipped quietly (MeshWeaver#8619).
+                .AddSingleton<MeshWeaver.Graph.IRetiredPackages, MeshWeaver.Graph.RetiredPackageLedger>()
                 .AddSingleton<InstanceAutoRegistrationService>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
                     sp => sp.GetRequiredService<InstanceAutoRegistrationService>())
