@@ -1017,7 +1017,13 @@ internal static class NodeTypeCompilationHelpers
                                             ? SettleAsHold(pendingDefinition, reason, reasonText)
                                             : SettleAsUnknownMembershipHold(pendingDefinition, reason, reasonText))
                                         return;
-                                    logger?.LogError(
+                                    // A bundle for THIS identity names the type and was DECLINED by a designed rule
+                                    // (a platform floor above the running build, a source fingerprint): the old
+                                    // platform keeping the old build is the intended outcome of a mixed-version
+                                    // rollout, so it is a Warning that states the reason. No bundle at all is the
+                                    // gap nobody has filled — that stays an Error.
+                                    logger?.Log(
+                                        offeredByBundle ? LogLevel.Warning : LogLevel.Error,
                                         "Compile watcher: {HubPath} is a module's content (or of unknown "
                                         + "membership: {Unknown}; declared module version without an install "
                                         + "record: {Declared}) in a partition this mesh does not track, and "
@@ -1504,6 +1510,15 @@ internal static class NodeTypeCompilationHelpers
             && !IsStaticOnlyNodeType(node, def);
         var failedVerdictKickoffSub = ownStream
             .Where(FailedVerdictWantsRedrive)
+            // 🚨 A replica BELOW the package's dependency floor forms no verdict (#6195), so a re-drive
+            // it flips would only end at Unavailable ("compile NOT ATTEMPTED") — and each such flip
+            // spent one of the automatic attempts, so a mixed-version rollout burned the whole budget
+            // and left the type to a human with the Compile button (measured: attempts 8-9 of 8 on a
+            // replica one patch below the floor). It waits instead, spending nothing — and the gate sits BEFORE the dedupe, so a trigger it swallowed is not remembered as seen: a replica that
+            // meets the floor re-drives the type, and this one does so once its own platform arrives.
+            .SelectMany(node => MeetsDependencyFloorHere(hub, hubPath, "failed-verdict re-drive", logger)
+                .Where(eligible => eligible)
+                .Select(_ => node))
             // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
             // still in flight; correctness is the re-check inside the Update lambda, not this.
             //
