@@ -47,7 +47,7 @@ name: Node repo gate (reusable)
 # Maintainer rule, 2026-09-12, verbatim: "for compile always find latest package of platform and
 # plugins." Every satellite resolves the newest PLATFORM-SEALED core set at run time
 # (MeshWeaver#3842) and re-resolves it in the first step of every NORMAL job, so a "re-run failed
-# jobs" tests the newest packages (Education#320 / #323, Reinsurance#202, Crm#94, Manufacturing#82,
+# jobs" tests the newest packages (Education#320 / #323, Reinsurance#202, Manufacturing#82,
 # SocialMedia#181, Plugins#1739). What a satellite CANNOT refresh is THIS lane: a `uses:` job takes
 # `image-digest` / `platform-image-digest` as `with:` inputs evaluated when it is CALLED, from the
 # caller's stored `platform-ref` outputs, and GitHub offers no hook inside a reusable workflow for
@@ -369,7 +369,7 @@ on:
           volume runner tell a set the volume has not REACHED yet (waited out, bounded) from one it
           has moved PAST (red at once, #4281): without it both are red at once, so a caller that
           resolved a set sealed minutes earlier went red on every run until ci-platform-refresh's
-          next tick (measured 2026-09-15, MeshWeaver.Crm#108: 3.0.0-ci.8687 sealed 17:43:27Z, shard
+          next tick (measured 2026-09-15: 3.0.0-ci.8687 sealed 17:43:27Z, shard
           17:50Z, "carries no set for tester digest … passed no --set"). Refused unless it has the
           set shape, and refused without a pin (the lane then resolves, and names, its own set).
         required: false
@@ -1977,10 +1977,10 @@ jobs:
           #
           # 🚨 THE `schedule` ROW IS THE ONE THAT USED TO BE WRONG. This lane's message promised
           # "the upstream's own publish-bake for this identity re-enables this run", which is TRUE
-          # for a dispatch wave (measured 2026-09-08 on MeshWeaver.Crm: red 15:36Z, the
+          # for a dispatch wave (measured 2026-09-08 on a satellite: red 15:36Z, the
           # meshweaver-upstream-published wake for the same set green at 16:01Z) and FALSE for a
           # nightly poll — the poll re-resolves a MOVING tag, so its next run asks about a different
-          # identity and never retries this one. Manufacturing#67 / Crm#66.
+          # identity and never retries this one. Manufacturing#67.
           upstream_not_ready() { # <src> <where> <extra sentence>
             local src="$1" where="$2" extra="${3:-}"
             {

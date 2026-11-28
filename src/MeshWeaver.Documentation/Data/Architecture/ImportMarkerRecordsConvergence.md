@@ -28,7 +28,7 @@ skip concludes from it:
 
 Measured end to end on the control instance, 2026-09-07/08.
 
-`MeshWeaver.Crm` deleted four files on 09-06. The 09-07 10:15Z import ran, computed the prune set
+The CRM's repository deleted four files on 09-06. The 09-07 10:15Z import ran, computed the prune set
 correctly, and found every one of them — and then kept them all:
 
 ```

@@ -126,7 +126,7 @@ gives the pack tab precedence, compared case-insensitively (MeshWeaver.Plugins#4
 
 | Where | Shape |
 |---|---|
-| CRM portfolio board (MeshWeaver.Crm) | Reply needed / Waiting on them (computed) · one category per counterparty kind · Deals (legend + pipeline). |
+| CRM portfolio board (MeshWeaver.Plugins/Crm) | Reply needed / Waiting on them (computed) · one category per counterparty kind · Deals (legend + pipeline). |
 | AI catalogs — `src/MeshWeaver.AI/AiCatalogLayoutAreas.cs` (Plugins) | Agents / Skills / Providers / Models / Tiers × This space · User · Global (or one category per source); a "+" per tab into that tab's namespace; "This space" conditional. |
 | AI Settings — `MyAi/Panel/Source/AiSettingsAreas.cs` (Plugins) | Per kind (Skill / Agent / Model) one category per ACTIVE source row, name order, four columns; one bar per kind (`QueryDataId` per kind, because the apps share the page's area). |
 | Submissions book — `ReinsuranceDemo/Book` (MeshWeaver.Reinsurance) | One category per tab of `BookQueries.Tabs` under the node's bound header; embedded with `Render(host)` inside a template. The last caller of `WithMeshSearch`. |

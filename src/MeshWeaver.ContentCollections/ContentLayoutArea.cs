@@ -269,9 +269,21 @@ public static class ContentLayoutArea
             .Catch((Exception ex) => Observable.Return<UiControl?>(
                 new MarkdownControl($"Error loading content: {ex.Message}")));
 
+    /// <summary>
+    /// A content reference id may carry a query string (an embed appends <c>?showHeader=false</c>);
+    /// the query is a parameter, never part of the collection path.
+    /// </summary>
+    public static string StripQuery(string? id)
+    {
+        if (string.IsNullOrEmpty(id))
+            return "";
+        var q = id.IndexOf('?');
+        return q < 0 ? id : id[..q];
+    }
+
     private static IObservable<UiControl?> UnifiedContentCore(LayoutAreaHost host)
     {
-        var contentPath = host.Reference.Id?.ToString() ?? "";
+        var contentPath = StripQuery(host.Reference.Id?.ToString());
 
         // If no path specified, render the node's own content from the MeshNode.Content property
         if (string.IsNullOrEmpty(contentPath))
