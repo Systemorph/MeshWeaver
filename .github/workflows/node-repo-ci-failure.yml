@@ -97,6 +97,14 @@ name: Node repo ci-failure ledger (reusable)
 #
 # ─────────────────────────────── CALLER CONTRACT ───────────────────────────────
 #
+# 🚨 A JOB KILLED AT `timeout-minutes` IS RED, AND `failure()` NEVER SEES IT. The job ends `cancelled`
+# (not `failure`), so a reporter gated on `failure()` alone stayed skipped and nobody was told. The
+# failure half therefore also fires on `!cancelled() && contains(needs.*.result, 'cancelled')`: a need
+# cancelled while the RUN was not. A run cancelled as a whole — a newer push superseding it under
+# `cancel-in-progress`, a person pressing Cancel — has `cancelled()` true and stays silent, because a
+# superseded run is not a red main. The success half carries the complement (`!contains(...)`), so the
+# pair still partitions every run and a timed-out job can never close the ledger.
+#
 # Two jobs at the END of the satellite's ci.yml. `needs:` must name EVERY gate job — a job missing
 # from the list fails silently, which is the whole failure mode this lane exists to prevent. Both are
 # statically unreachable from a pull request (`github.event_name != 'pull_request'` first, so
@@ -106,7 +114,9 @@ name: Node repo ci-failure ledger (reusable)
 #   ci-failure:
 #     name: "main is red: file it, tell the control portal"
 #     needs: [validate, compile-check, test-repos, publish-bake]        # ← EVERY gate job
-#     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && failure()
+#     if: >-
+#       github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+#       && (failure() || (!cancelled() && contains(needs.*.result, 'cancelled')))
 #     permissions: {contents: read, issues: write, actions: read}
 #     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
 #     with:
@@ -124,7 +134,9 @@ name: Node repo ci-failure ledger (reusable)
 #   ci-green:
 #     name: "main is green: close the ledger"
 #     needs: [validate, compile-check, test-repos, publish-bake]        # ← the SAME list
-#     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && success()
+#     if: >-
+#       github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+#       && success() && !contains(needs.*.result, 'cancelled')
 #     permissions: {contents: read, issues: write, actions: read}
 #     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
 #     with:
