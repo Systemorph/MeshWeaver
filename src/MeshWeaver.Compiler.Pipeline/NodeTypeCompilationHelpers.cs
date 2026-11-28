@@ -3148,9 +3148,9 @@ internal static class NodeTypeCompilationHelpers
             () => ownStream
             // ContentAs, never a type test: a definition that arrives as a JsonObject/JsonElement reads
             // as ABSENT to `is NodeTypeDefinition`, and a watcher that never matches never says so.
-            .Where(node => node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } heldDef
-                    && declines.IsDue(heldDef, BuildInputsToken(ModulesHashOf(hub), heldDef.CurrentSourceVersions))
-                || node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } def
+            .Where(node => (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } heldDef
+                    && declines.IsDue(heldDef, BuildInputsToken(ModulesHashOf(hub), heldDef.CurrentSourceVersions)))
+                || (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } def
                 && def.RequestedReleaseAt is { } req
                 // Strictly past our process-local COMMIT high-water — a flapped-back
                 // older value (or a duplicate emission of an already-committed
@@ -3166,7 +3166,7 @@ internal static class NodeTypeCompilationHelpers
                 // compile's own activity — age is only the floor.
                 && (def.CompilationStatus is not CompilationStatus.Pending
                                           and not CompilationStatus.Compiling
-                    || InFlightCompileIsStale(def, req) is not null)),
+                    || InFlightCompileIsStale(def, req) is not null))),
                 node =>
                 {
                     // 🚨 The trigger value OBSERVED by the Where for THIS emission.
@@ -3179,14 +3179,12 @@ internal static class NodeTypeCompilationHelpers
                     // The re-judgement of a held type whose decline inputs moved. A genuine request
                     // (past both gates) is always an ordinary request; only a held record with no
                     // request standing, or one already handled, is a re-judgement.
-                    var ordinary = observed?.RequestedReleaseAt is { } asked
-                        && dispatchHighWater.IsPast(asked)
-                        && (observed.LastReleaseRequestHandledAt is null
-                            || asked > observed.LastReleaseRequestHandledAt.Value);
-                    var rejudge = !ordinary && declines.IsDue(observed, liveInputs) && declines.TryClaim(liveInputs);
-                    if (!ordinary && !rejudge) return;
-                    if (ordinary) declines.Note(liveInputs);
-                    var triggerAt = rejudge ? DateTimeOffset.UtcNow : observed!.RequestedReleaseAt!.Value;
+                    var askedAt = observed?.RequestedReleaseAt;
+                    var kind = declines.Classify(
+                        observed, liveInputs, askedAt is { } at && dispatchHighWater.IsPast(at));
+                    if (kind == ReleaseTrigger.None) return;
+                    var rejudge = kind == ReleaseTrigger.Rejudge;
+                    var triggerAt = rejudge ? DateTimeOffset.UtcNow : askedAt ?? DateTimeOffset.UtcNow;
                     void AdvanceHighWater()
                     {
                         // A re-judgement carries no request: advancing the mark to "now" would drop

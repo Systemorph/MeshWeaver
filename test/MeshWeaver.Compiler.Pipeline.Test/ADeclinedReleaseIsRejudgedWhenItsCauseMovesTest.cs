@@ -110,4 +110,45 @@ public class ADeclinedReleaseIsRejudgedWhenItsCauseMovesTest
         var adopted = Held() with { BuildProvenance = BuildProvenance.AdoptedVerified, DeliveryHoldReason = null };
         Assert.False(ledger.IsDue(adopted, Inputs("m9")));
     }
+
+    // The watcher's decision for one emission (DeclinedReleaseLedger.Classify), driven with the
+    // records the watcher sees.
+    [Fact]
+    public void AHeldRecordWhoseInputsMovedIsRejudgedExactlyOnceThroughTheWatcherDecision()
+    {
+        var ledger = new DeclinedReleaseLedger();
+
+        Assert.Equal(ReleaseTrigger.Rejudge, ledger.Classify(Held(), Inputs("m1"), pastHighWater: false));
+        // The same held record emitted again under the same inputs: nothing.
+        Assert.Equal(ReleaseTrigger.None, ledger.Classify(Held(), Inputs("m1"), pastHighWater: false));
+        // The inputs move: once more, then settled.
+        Assert.Equal(ReleaseTrigger.Rejudge, ledger.Classify(Held(), Inputs("m2"), pastHighWater: false));
+        Assert.Equal(ReleaseTrigger.None, ledger.Classify(Held(), Inputs("m2"), pastHighWater: false));
+    }
+
+    [Fact]
+    public void AGenuineRequestArrivingWhileARejudgementIsInFlightIsNotDropped()
+    {
+        var ledger = new DeclinedReleaseLedger();
+        Assert.Equal(ReleaseTrigger.Rejudge, ledger.Classify(Held(), Inputs("m1"), pastHighWater: false));
+
+        // A request lands on the same record, same inputs: it is handled as an ordinary request,
+        // not swallowed by the claim the re-judgement already took.
+        var requested = Held() with { RequestedReleaseAt = DateTimeOffset.UtcNow };
+        Assert.Equal(ReleaseTrigger.Ordinary, ledger.Classify(requested, Inputs("m1"), pastHighWater: true));
+    }
+
+    [Fact]
+    public void ARequestAlreadyHandledOrBehindTheHighWaterIsNotOrdinary()
+    {
+        var ledger = new DeclinedReleaseLedger();
+        var at = DateTimeOffset.UtcNow;
+        var handled = Held() with { RequestedReleaseAt = at, LastReleaseRequestHandledAt = at };
+
+        // Handled on the node: falls to the re-judgement route (held, never judged here).
+        Assert.Equal(ReleaseTrigger.Rejudge, ledger.Classify(handled, Inputs("m1"), pastHighWater: true));
+        // Behind the process high-water: the same.
+        var behind = Held() with { RequestedReleaseAt = at };
+        Assert.Equal(ReleaseTrigger.None, ledger.Classify(behind, Inputs("m1"), pastHighWater: false));
+    }
 }

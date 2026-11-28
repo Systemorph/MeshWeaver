@@ -550,8 +550,9 @@ public sealed class DeclinedReleaseLedger
     /// already), and was last judged here under different inputs. Pure: records nothing.
     /// </summary>
     public bool IsDue(NodeTypeDefinition? def, string liveInputs)
-        => BuildDeliveryHold.IsHeld(def)
-           && def!.CompilationStatus is not (CompilationStatus.Pending or CompilationStatus.Compiling)
+        => def is { } held
+           && BuildDeliveryHold.IsHeld(held)
+           && held.CompilationStatus is not (CompilationStatus.Pending or CompilationStatus.Compiling)
            && !string.Equals(Volatile.Read(ref judgedUnder), liveInputs, StringComparison.Ordinal);
 
     /// <summary>
@@ -561,7 +562,41 @@ public sealed class DeclinedReleaseLedger
     public bool TryClaim(string liveInputs)
         => !string.Equals(Interlocked.Exchange(ref judgedUnder, liveInputs), liveInputs, StringComparison.Ordinal);
 
+    /// <summary>
+    /// What the release watcher should do with one emission of a type's own record: nothing, handle
+    /// the genuine request standing on it, or re-judge a held decline whose inputs moved. A genuine
+    /// request always wins and notes its inputs (so the same inputs are not judged again); a
+    /// re-judgement is claimed exactly once per distinct input set. Mutates only this ledger.
+    /// </summary>
+    /// <param name="observed">The definition this emission carries.</param>
+    /// <param name="liveInputs">The decline inputs as they are now.</param>
+    /// <param name="pastHighWater">Whether the request's trigger is strictly past this process's
+    /// commit high-water mark.</param>
+    internal ReleaseTrigger Classify(NodeTypeDefinition? observed, string liveInputs, bool pastHighWater)
+    {
+        var ordinary = pastHighWater
+            && observed?.RequestedReleaseAt is { } asked
+            && (observed.LastReleaseRequestHandledAt is null || asked > observed.LastReleaseRequestHandledAt.Value);
+        if (ordinary)
+        {
+            Note(liveInputs);
+            return ReleaseTrigger.Ordinary;
+        }
+        return IsDue(observed, liveInputs) && TryClaim(liveInputs) ? ReleaseTrigger.Rejudge : ReleaseTrigger.None;
+    }
+
     /// <summary>Records that a judgement under <paramref name="liveInputs"/> happened by the
     /// ordinary route (a request reached the gate), so the same inputs are not judged again.</summary>
     public void Note(string liveInputs) => Volatile.Write(ref judgedUnder, liveInputs);
+}
+
+/// <summary>What the release watcher does with an emission, see <see cref="DeclinedReleaseLedger.Classify"/>.</summary>
+internal enum ReleaseTrigger
+{
+    /// <summary>Nothing to do.</summary>
+    None,
+    /// <summary>A genuine release request is standing.</summary>
+    Ordinary,
+    /// <summary>A held decline whose inputs moved is judged again.</summary>
+    Rejudge,
 }

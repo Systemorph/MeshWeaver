@@ -3814,6 +3814,8 @@ A delivery gate that answers a release request by keeping the last build (`Build
 
 It never loops: the inputs are claimed before the judgement is dispatched, so an unchanged input cannot re-fire it, and a decline that declines again settles. Re-judging costs the adoption pass, not a Roslyn compile.
 
+---
+
 ## The existence probe is shared, one per NodeType
 
 `EnrichWithNodeType` starts every per-node activation with a one-shot `path:{nodeType}` probe. That probe
