@@ -1667,6 +1667,16 @@ jobs:
           PLATFORM_SET: ${{ steps.publication-platform.outputs.platform-set }}
           RUNNER_LABEL: ${{ inputs.runner }}
           PLATFORM_VOLUME: /opt/platform
+          # 🚨 TOLERANT OF DRIFT (maintainer, 2026-09-09: "We must not pin anything. It must be
+          # tolerant."). A platform this LANE resolved is not a pin: when a newer sealed set
+          # overtakes it while the shard waits, the shard re-resolves to the newer set of the same
+          # major and SAYS so (Manufacturing#158). A caller's pin, an `MW_PLATFORM_REF` freeze and a
+          # ceiling are instructions, never moved. Each shard records the set it gated and the fold
+          # refuses shards that disagree, so no fan-out can report green across two platforms.
+          PLATFORM_RESOLVED: ${{ needs.plan.outputs.resolved }}
+          PLATFORM_FREEZE: ${{ vars.MW_PLATFORM_REF }}
+          PLATFORM_CEILING: ${{ inputs.platform-ceiling }}
+          PUBLICATION_MODE: ${{ steps.publication-platform.outputs.mode }}
         run: |
           set -euo pipefail
           SCRIPT="${RUNNER_TEMP:-/tmp}/resolve-gate-platform.sh"
@@ -1678,9 +1688,14 @@ jobs:
           OUT="${RUNNER_TEMP:-/tmp}/platform-mode.txt"
           # `tee`, under pipefail: the resolver's refusals are ::error:: lines on stdout, so they
           # must be SHOWN, and its exit code must still fail this step.
+          FOLLOW=()
+          if [ "${PLATFORM_RESOLVED:-}" = "true" ] && [ -z "${PLATFORM_FREEZE:-}" ] && [ -z "${PLATFORM_CEILING:-}" ] \
+             && [ "${PUBLICATION_MODE:-legacy}" != "pin" ]; then
+            FOLLOW=(--follow-newer)
+          fi
           "$SCRIPT" --volume-root "$PLATFORM_VOLUME" \
             --tester-digest "$TESTER_DIGEST" --portal-digest "$PLATFORM_DIGEST" \
-            --set "${PLATFORM_SET:-}" | tee "$OUT"
+            --set "${PLATFORM_SET:-}" ${FOLLOW[@]+"${FOLLOW[@]}"} | tee "$OUT"
           MODE=$(sed -n 's/^mode=//p' "$OUT" | head -1)
           case "$MODE" in
             volume)
@@ -1704,7 +1719,11 @@ jobs:
           {
             echo "### Gate shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }} — platform source: \`$MODE\`"
             echo ""
-            sed -n 's/^\(mode\|set\|digest\|core_sha\|dir\)=/- **\1**: /p' "$OUT"
+            sed -n 's/^\(mode\|set\|digest\|core_sha\|dir\|rebased\|rebased_from\|rebased_to\)=/- **\1**: /p' "$OUT"
+            if grep -q '^rebased=true$' "$OUT"; then
+              echo ""
+              echo "The set this run resolved was overtaken by a newer sealed set; this shard gated against the newer one ($(sed -n 's/^rebased_from=//p' "$OUT") to $(sed -n 's/^rebased_to=//p' "$OUT")). Ordinary drift, not a defect. Every shard records its set and the fold refuses a run whose shards disagree."
+            fi
           } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
       # ───────────── VOLUME MODE: the runtime the composed host is started with ─────────────
       # In container mode the tester is started by the PORTAL image's own `dotnet` (10.0.12, with
@@ -1936,9 +1955,12 @@ jobs:
           # The upstreams that carried a platform record when the host was chosen: only for these is
           # a vanished record a reseal (a legacy upstream beside a recorded one is the fallback).
           RECORDED_SOURCES: ${{ steps.publication-platform.outputs.recorded-sources }}
-          COMPOSED_SET: ${{ steps.publication-platform.outputs.platform-set }}
-          COMPOSED_TESTER: ${{ steps.publication-platform.outputs.image-digest }}
-          COMPOSED_PORTAL: ${{ steps.publication-platform.outputs.platform-image-digest }}
+          # What the host ACTUALLY is: the set `platform-source` re-resolved to when the one this
+          # run resolved was overtaken (`rebased=true`), else the decided platform.
+          COMPOSED_SET: ${{ steps.platform-source.outputs.rebased == 'true' && steps.platform-source.outputs.set || steps.publication-platform.outputs.platform-set }}
+          COMPOSED_TESTER: ${{ steps.platform-source.outputs.rebased == 'true' && steps.platform-source.outputs.tester_digest || steps.publication-platform.outputs.image-digest }}
+          COMPOSED_PORTAL: ${{ steps.platform-source.outputs.rebased == 'true' && steps.platform-source.outputs.portal_digest || steps.publication-platform.outputs.platform-image-digest }}
+          HOST_REBASED: ${{ steps.platform-source.outputs.rebased }}
         run: |
           set -euo pipefail
           SEED_DIR="${RUNNER_TEMP:-/tmp}/upstream-seed"
@@ -1961,7 +1983,10 @@ jobs:
           # upstream resealed on another set after the host was composed (a re-run takes the new one).
           seed_matches_host() { # <src> --index <file> | --record <file> | --no-record
             local src="$1"; shift
+            local rebased_args=()
+            [ "${HOST_REBASED:-}" = "true" ] && rebased_args=(--host-rebased)
             python3 "$PUBPLAT" verify --source "$src" --mode "${PLATFORM_MODE:-legacy}" \
+              ${rebased_args[@]+"${rebased_args[@]}"} \
               --composed-set "${COMPOSED_SET:-}" --composed-tester "${COMPOSED_TESTER:-}" \
               --composed-portal "${COMPOSED_PORTAL:-}" --identity "$IDENTITY" \
               --recorded-sources "${RECORDED_SOURCES:-}" "$@"
@@ -2660,6 +2685,9 @@ jobs:
           # The sealed set the volume served (volume mode only; empty in container mode). It is the
           # platform's release version, and in volume mode the tester learns it from here alone.
           VOLUME_SET: ${{ steps.platform-source.outputs.set }}
+          # The set THIS shard gates, recorded in its log as a receipt the fold cross-checks.
+          GATE_PLATFORM_SET: ${{ steps.platform-source.outputs.set || steps.publication-platform.outputs.platform-set }}
+          GATE_PLATFORM_REBASED: ${{ steps.platform-source.outputs.rebased }}
         # Allow entries whose module is not mounted on a narrowed run are "unverifiable" —
         # warned, never failed — so narrowing cannot trip the ratchet. On a narrowed run the
         # affected closure is STAGED into its own tree and gated as the repo root — the tester
@@ -2935,6 +2963,12 @@ jobs:
           # missing exactly when a caller's ratchet needs the `GATE FAILED` line. The tester's exit
           # code is carried past `tee` explicitly and re-raised after, so a red gate is still red.
           echo "GATE_LOG=$GATE_LOG" >> "$GITHUB_ENV"
+          # 🚨 THE PLATFORM RECEIPT: every shard names the set it gates, first line of its log, and
+          # gate-shard-merge.py refuses a fold whose shards name different sets. A shard that
+          # re-resolved because its set was overtaken says so on the same line.
+          NOTE=""
+          [ "${GATE_PLATFORM_REBASED:-}" = "true" ] && NOTE=" (re-resolved: the set this run resolved was overtaken by a newer sealed set)"
+          echo "gate platform: set ${GATE_PLATFORM_SET:-unknown}${NOTE}" > "$GATE_LOG"
           # 🚨 THE SLICE. Empty for `shards: 1`, which is byte-for-byte the pre-fan-out command line —
           # so a caller that does not opt in cannot be affected by this at all, and an image that
           # predates the flag keeps working for them. When it IS set, the flag is asserted BY NAME
@@ -2977,7 +3011,7 @@ jobs:
           set +e
           # shellcheck disable=SC2086
           run_tester "$P_REPO" --app "$P_APP" \
-            "${ALLOW_ARGS[@]}" ${MODULE_ARGS:-} "${SHARD_ARGS[@]}" --seed "$P_SEED" | tee "$GATE_LOG"
+            "${ALLOW_ARGS[@]}" ${MODULE_ARGS:-} "${SHARD_ARGS[@]}" --seed "$P_SEED" | tee -a "$GATE_LOG"
           rc=${PIPESTATUS[0]}
           set -e
           if [ "$rc" -ne 0 ]; then
