@@ -6,7 +6,7 @@ name: Node repo validate (reusable)
 # half runs the PLATFORM's `.github/scripts/gen-manifests.py`, fetched at `platform-ref`, against
 # the caller's tree — the same centralization as compile-check.py, and for the same measured
 # reason: the six vendored copies had drifted to five vintages (Plugins 1157 lines,
-# Education 646, Reinsurance 644, SocialMedia 643, Manufacturing 305), so each fix landed in one
+# Education 646, Reinsurance 644, SocialMedia 643, Manufacturing 305, a since-archived repo 646), so each fix landed in one
 # repo and the other five kept the bug (#434, #942/#1023, #1426).
 #
 # Caller contract:
@@ -549,7 +549,8 @@ jobs:
       # `compile-check.py` — a canonical whose surface moves. It existed only as three vendored
       # copies, so when core #4711 replaced the compile model and removed `usings_union` they broke
       # at once and DIFFERENTLY (Reinsurance: AttributeError before a single test ran, its own
-      # self-test still green; Plugins: alive only via a vendored compile-check fork carrying the
+      # self-test still green; a since-archived repo: a locally re-derived union, so it kept running
+      # against a model the gate had abandoned; Plugins: alive only via a vendored compile-check fork carrying the
       # removed helper) — and not one lane in the fleet was red, because no CI job invoked the
       # caller. The canonical now lives in core and a satellite keeps a LAUNCHER. This guard refuses
       # the copy coming back; `run-node-tests.py --self-test` in core's own CI is what proves the

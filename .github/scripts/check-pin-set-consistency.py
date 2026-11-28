@@ -153,13 +153,13 @@ ASSIGN_RE = re.compile(
     re.MULTILINE,
 )
 
-# Shape 2 — a shell assignment into $GITHUB_OUTPUT. SocialMedia pins its tester digest
+# Shape 2 — a shell assignment into $GITHUB_OUTPUT. SocialMedia (and a since-archived repo) pin their tester digest
 # this way, which is invisible to any scan of `env:` blocks.
 #
 # 🚨 IT MATCHES AN ATTEMPTED DIGEST, NOT A WELL-FORMED ONE, and that is the whole point. This gate's
 # own first draft required `sha256:[0-9a-f]{64}` here, and the both-ways falsification on the REAL
 # ci.yml of the three repos it was written for caught it: `image-digest=sha256:PLACEHOLDER` matched
-# NOTHING, so SocialMedia — whose tester pin is written exactly this way — went GREEN over a
+# NOTHING, so SocialMedia and a since-archived repo — whose tester pin is written exactly this way — went GREEN over a
 # placeholder while Manufacturing (whose tester pin is an `env:` key) went red. The vacuity trap
 # this file exists to close, reproduced inside it, in the shape the file itself had not covered.
 # Classification into pin / MALFORMED happens below, once, for both shapes.

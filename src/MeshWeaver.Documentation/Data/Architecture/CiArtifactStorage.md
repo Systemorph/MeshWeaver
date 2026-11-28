@@ -100,7 +100,7 @@ What to expect, and what is not explained:
   Memex `actions-cleanup.yml` was therefore red every night from 2026-09-26 and deleted nothing in
   Plugins. Memex#796 takes Plugins off its list, because Plugins no longer writes there. If Plugins
   ever returns to `gha`, the walk must first stop using the unfiltered listing.
-- 🚨 **Reinsurance and Manufacturing are billed a constant that no API explains.** Their
+- 🚨 **Reinsurance, Manufacturing and a since-archived repo were billed a constant that no API explains.** Their
   meter is identical to the GB-hour on every full day for a month, while their visible artifacts
   churn nightly and total a few MB. Nothing in this repository changes that number. It is a
   question for GitHub billing support: what is metered for those three repositories? Moving them
@@ -410,7 +410,7 @@ the move to `azblob:` this page already recommends.
 > that did and did not move is under [Where it stands](#where-it-stands-measured-2026-10-21-rest-only).
 
 **`MW_ARTIFACT_STORE=gha` is set as a REPOSITORY variable on eight repositories** — `MeshWeaver`,
-`.Plugins`, `.Education`, `.Reinsurance`, `.SocialMedia`, `.Manufacturing`, `.Feedback` —
+`.Plugins`, `.Education`, `.Reinsurance`, `.SocialMedia`, `.Manufacturing`, `.Feedback` and a since-archived repo —
 since 2026-09-19T05:35Z, on the maintainer's instruction, after ~9 h in which every
 `MeshWeaver.Plugins` run was red and 20 pull requests could not go green. A repository variable
 overrides the organisation one, so each is back on the GitHub-artifact path. It was verified on both

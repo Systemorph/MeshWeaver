@@ -80,7 +80,7 @@ DESIGN CONSTRAINTS, each one a thing this fleet has already been bitten by
   `sha256:<64 hex>` nor a `${{ … }}` forward is a FAILURE (MALFORMED), never an absence.
 
 * A ZERO IS MEASURED, NOT ASSUMED. Education pins under `MW_PORTAL_DIGEST` / `MW_MIGRATION_DIGEST`
-  / `MW_TEST_DIGEST`, SocialMedia pins inside a `run:` step output, Plugins and Reinsurance
+  / `MW_TEST_DIGEST`, SocialMedia and a since-archived repo pin inside a `run:` step output, Plugins and Reinsurance
   use `MW_IMAGE_DIGEST` / `MW_PORTAL_IMAGE_DIGEST`. A check keyed on the two common names reports
   four of six repos clean while verifying none of their pins. So extraction is shape-driven, not
   name-driven, and the report PRINTS THE DENOMINATOR — repos scanned, repos that pin, repos that do

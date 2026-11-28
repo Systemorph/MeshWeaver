@@ -222,7 +222,7 @@ file in all 34 org repositories, deliberately not the shipped extractor):
 |---|---|
 | repositories in the org | 34 |
 | …with a `.github/workflows` directory | 16 |
-| …declaring ≥ 1 digest pin | 5 (Education, Manufacturing, Plugins, Reinsurance, SocialMedia) |
+| …declaring ≥ 1 digest pin | 6 (Education, Manufacturing, Plugins, Reinsurance, SocialMedia, a since-archived repo) |
 | `sha256:`-shaped tokens found | 31 |
 | …inside COMMENTS (prose about past incidents) | 11 |
 | **pin declaration SITES** | **20** — exactly what the lock job reports |
@@ -235,8 +235,8 @@ file in all 34 org repositories, deliberately not the shipped extractor):
 Two things that only a hand count shows. **Eleven of thirty-one `sha256:` tokens are comments** —
 several of them narrating *this* incident inside the very files it broke — so any "count the digests"
 instrument that does not exclude them over-reports by more than a third. And **20 sites collapse to
-15 declarations** in the shipped report, because it dedupes on `(declaration name, digest)` and 
-Plugins writes the same `platform-image-digest:` value at two lane calls; 9 distinct
+15 declarations** in the shipped report, because it dedupes on `(declaration name, digest)` and both
+Plugins and a since-archived repo write the same `platform-image-digest:` value at two lane calls; 9 distinct
 manifests is the number retention actually has to keep alive, and it is the one the two counts agree
 on.
 

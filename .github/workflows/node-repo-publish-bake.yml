@@ -412,7 +412,7 @@ on:
           the `ci.yml` on `main` of the node repos (Plugins, Education, Reinsurance,
           SocialMedia, Manufacturing): every `uses:` of a `node-repo-*.yml` lane is `@main`, every
           `scripts-ref:` is `main`, and NONE passes this input — so flipping the default here is
-          what flips the five single-producer prefixes, with no change in their repositories.
+          what flips every single-producer prefix, with no change in their repositories.
 
           🚨 THE LAYOUT BELONGS TO THE PREFIX, NOT TO THIS INPUT — so a prefix may be flipped ONE
           PRODUCER AT A TIME. A live `_current` means some producer already writes generations, and

@@ -151,8 +151,8 @@ previously refused, runs **44 tests, 44 passed**.
 `MW_PLATFORM_SCRIPTS` (a core checkout's `.github/scripts`) always wins — that is the offline route
 and the way to pin the harness to an exact vintage. Otherwise:
 
-- **MeshWeaver.Reinsurance** — `scripts/platform-script.py`, the loader those
-  repositories already use for `compile-check.py`. There, `LANE_FOR` maps `run-node-tests.py` to
+- **MeshWeaver.Reinsurance** — `scripts/platform-script.py`, the loader that
+  repository already uses for `compile-check.py`. There, `LANE_FOR` maps `run-node-tests.py` to
   `node-repo-compile-check.yml` — **the same lane as `compile-check.py`, deliberately**, so one ref
   governs both and the harness cannot be a different vintage from the unit shaping it compiles.
 - **MeshWeaver.Plugins** — its own launcher fetches *both* scripts into one cache outside the

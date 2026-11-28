@@ -455,9 +455,9 @@ is the implemented choice and the second remains rejected:
 🚦 **The refusal is ALREADY LIVE in five of the six node repos — this page said the opposite, and
 the opposite is what would have been planned around.** The claim here was that every node repo
 consumes these lanes at a full sha, so the assertion stayed INERT until each repo's own pin bump.
-Measured 2026-09-11 over every `uses: Systemorph/MeshWeaver/.github/workflows/…` line in all six
+Measured 2026-09-11 over every `uses: Systemorph/MeshWeaver/.github/workflows/…` line in the satellites
 (`MeshWeaver.Plugins`, `.Education`, `.Reinsurance`, `.SocialMedia`, `.Manufacturing`):
-**five consume `node-repo-gate.yml` and `node-repo-publish-bake.yml` at `@main`**, so they took the
+**four consume `node-repo-gate.yml` and `node-repo-publish-bake.yml` at `@main`**, so they took the
 refusal the hour it merged and there is no pin to move; only `MeshWeaver.Education` pins a sha
 (`67cbbe0e…`), and the verdict is absent from that file at that sha. Both directions are read off
 the LOGS rather than inferred from the ref — MeshWeaver.Plugins run `34563887604` and

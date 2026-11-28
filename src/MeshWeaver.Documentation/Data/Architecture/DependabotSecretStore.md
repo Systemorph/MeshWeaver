@@ -302,8 +302,8 @@ them needs nobody who holds a secret. Fourteen were mirrored this way on 2026-09
 | name | value established from | mirrored into |
 |---|---|---|
 | `AZURE_CLIENT_ID` | the `github-actions-bake` user-assigned identity — the only principal in the tenant with a federated credential for these repos (`repo:Systemorph/<repo>:ref:refs/heads/main`, in both the classic and the immutable subject format), holding exactly *Storage File Data Privileged Contributor* on the bake storage account | Reinsurance, SocialMedia, Education |
-| `AZURE_TENANT_ID` | that identity's tenant (`az account show`) | the same four |
-| `AZURE_SUBSCRIPTION_ID` | the subscription of the storage account each repo's own `vars.BAKE_PUBLISH_TARGETS` names | the same four |
+| `AZURE_TENANT_ID` | that identity's tenant (`az account show`) | the same three |
+| `AZURE_SUBSCRIPTION_ID` | the subscription of the storage account each repo's own `vars.BAKE_PUBLISH_TARGETS` names | the same three |
 | `MESHWEAVER_APP_ID` | `gh api /apps/meshweaver-cloud` — a public App id, and the App `auto-arm.yml` names by slug | MeshWeaver, Memex, Education |
 
 **Giving a Dependabot run the OIDC client id grants it nothing.** Federation is keyed on the token's

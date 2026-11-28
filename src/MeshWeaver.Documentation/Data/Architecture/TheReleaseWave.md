@@ -161,7 +161,7 @@ VARIABLE the resolver honours by design); every `uses: Systemorph/MeshWeaver/…
 (0 of 43 pinned to a sha); `check-platform-pins.py` is invoked nowhere. Every repository resolves the
 newest sealed set at run time with `resolve-platform.py` — and **carries its own copy of it**: seven
 copies at six distinct sizes on 2026-09-13 (core 68,150 B; Reinsurance 69,035;
-SocialMedia 69,035; Manufacturing 69,037; Plugins 60,365; Education 46,786). The reusable lanes fetch
+SocialMedia 69,035; Manufacturing 69,037; Plugins 60,365; Education 46,786; a since-archived repo 69,027). The reusable lanes fetch
 **core's** copy at `scripts-ref` for their own resolution, so the copies decide only what a
 satellite's *own* jobs resolve — which is exactly the file the same-drift argument on Plugins#1565
 was about.

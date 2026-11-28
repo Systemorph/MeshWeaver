@@ -565,7 +565,7 @@ requires) bought a full Copilot round on code the pull request did not change: n
   over its whole `FLEET` read `review_on_push: false` — `unchanged` — on all ten rulesets
   (MeshWeaver 2128472, MeshWeaver.Plugins 19008635, Memex 21038115, Education
   19153714, Reinsurance 20302588, SocialMedia 20302587, Manufacturing 20625978, FundReporting
-  23730648, Deploy 25787784), and every one of those ten repositories carries
+  23730648, Deploy 25787784, and a since-archived repo's), and every one of those ten repositories carries
   `.github/workflows/request-review-on-change.yml` on its default branch (contents API). Nothing is
   left to apply.
 - **The self-test.** The `REAL CHANGE` and `real-change` cases pin it: a main-only merge after a

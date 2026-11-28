@@ -77,9 +77,9 @@ flipped before (`strict` on MeshWeaver.Plugins was `true` until 2026-08-29 and `
 to find out on yours. `enforce_admins: true` matters because it removes the escape hatch: on
 Plugins an admin cannot merge past a deadlocked required context.
 
-Note also that **five of the six satellites already carry the prefixed name** `validate / Validate
+Note also that **four satellites already carry the prefixed name** `validate / Validate
 node repos` — Reinsurance, SocialMedia, Manufacturing and Education have all been through this
-rename. Four of those five also require `compile-check / Compile every NodeType (vs core)`;
+rename. Three of those four also require `compile-check / Compile every NodeType (vs core)`;
 Education is the exception, requiring its own course and e2e gates instead. **MeshWeaver.Plugins is
 the sole outlier still requiring a bare name**, which is why it is the repo this page was written
 from.

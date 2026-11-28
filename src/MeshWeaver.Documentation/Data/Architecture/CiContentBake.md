@@ -1152,7 +1152,7 @@ pre-existing caller at zero. Every other row was a repository that *called the l
 checked by it* — until the pin moved. The arrows record the move (MeshWeaver#3576), re-measured
 the same afternoon with the guard at core `main` against each repo's `origin/main`: 9/9 secrets
 asserted on SocialMedia, 6 of 8 reachable on Education with none unasserted — 0
-violations on all three. 🚨 A caller whose lane sha carries the guard but whose paired
+violations on both. 🚨 A caller whose lane sha carries the guard but whose paired
 `platform-ref` does not is STILL not checked: the lane fetches the guard at `platform-ref`, and
 answers "a pin older than the guard needs the older lane" (Education#278, a Dependabot bump of
 the lane alone, red for exactly this) — which is why the two move in ONE commit.
