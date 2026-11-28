@@ -1012,6 +1012,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             {
                 if (undelivered.IsEmpty)
                 {
+                    // Empty set: called only for its side effect of clearing the gate's memory,
+                    // so a later return of the condition warns again.
                     undeliveredWarnings.ShouldWarn(name, undelivered);
                     return;
                 }

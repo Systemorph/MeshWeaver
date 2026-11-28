@@ -269,8 +269,11 @@ public sealed class UndeliveredWarningGate
             return false;
         }
 
+        // Length-prefixed so an id containing ':' or '|' cannot collide with another set; a set,
+        // so the same package listed twice in one pass is one entry.
         var signature = string.Join("|", undelivered
-            .Select(u => $"{u.PackageId}:{u.Module}")
+            .Select(u => $"{u.PackageId.Length}:{u.PackageId}{(u.Module ?? "").Length}:{u.Module}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
         var changed = false;
         System.Collections.Immutable.ImmutableInterlocked.AddOrUpdate(
