@@ -123,7 +123,7 @@ whole lane is built to refuse.
 The transitional gap above closed: the `bundle-publication` branch exists
 (`PlatformBuildInboxWatcher.BroadcastPublication`, MeshWeaver.Plugins), every publishing caller
 posts the record, and phase 1 of the fleet CI refactor (Plugins#1707/#1709, Reinsurance#198,
-Crm#91, SocialMedia#178, Manufacturing#79; the process page is MeshWeaver.Plugins
+SocialMedia#178, Manufacturing#79; the process page is MeshWeaver.Plugins
 `Hosting/BuildAndReleaseProcess`) put `meshweaver-framework-released` behind a switch that is off
 by default and dropped it from the satellites' receivers. Its stated expectation was that the
 whole `repository_dispatch` share of the fleet's bill (≈15,000 minutes a day) goes away.

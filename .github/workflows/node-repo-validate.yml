@@ -585,7 +585,7 @@ jobs:
       # when this comment first quoted one.)
       #
       # Measured 2026-09-09: this fired in THREE repos in one session (MeshWeaver.Reinsurance,
-      # MeshWeaver.Crm, MeshWeaver.Manufacturing), each caught by hand. Reinsurance's own ci.yml
+      # MeshWeaver.Manufacturing and a third satellite), each caught by hand. Reinsurance's own ci.yml
       # records having had the same class before — "the previous pin's comment said ci.6353 while
       # the pin was ci.6469" — which is what makes it a guard rather than a fourth catch.
       - name: "An abbreviated sha resolves in its own file — the gate can fail (self-test)"
@@ -603,7 +603,7 @@ jobs:
       # Measured 2026-09-07, in this very lane's caller contract: a patcher adopting the
       # `centralized-gen-manifests` input below found the job's end with `s.index("\n  ", i)`, which
       # also matches `"\n    with:"`, and appended a SECOND `with:` to the `validate:` job in
-      # MeshWeaver.Education and MeshWeaver.Crm. The `uses:` sha had moved to the new lane; the
+      # MeshWeaver.Education and one more satellite. The `uses:` sha had moved to the new lane; the
       # effective `platform-ref` had not — so this lane would have fetched its central guard scripts,
       # and the canonical gen-manifests.py, at the OLD ref while running the NEW lane. Caught by
       # reading the rendered block, by nothing else.

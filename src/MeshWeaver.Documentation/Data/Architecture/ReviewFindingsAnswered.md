@@ -1037,7 +1037,6 @@ Measured 2026-09-19, from `branches/main/protection` and every active ruleset:
 | MeshWeaver | ruleset `2128472` | **yes** | yes |
 | MeshWeaver.Plugins | classic, 8 contexts | no | **no** |
 | MeshWeaver.Reinsurance | classic, 6 contexts | no | no |
-| MeshWeaver.Crm | classic, 6 contexts | no | no |
 | MeshWeaver.SocialMedia | classic, 7 contexts | no | no |
 | MeshWeaver.Manufacturing | classic, 6 contexts | no | no |
 | MeshWeaver.Education | ruleset, 4 contexts | no | no |
@@ -1051,7 +1050,6 @@ What that produces, over the last 20 merged pull requests of each of six reposit
 | repo | merged sampled | carried findings | merged with ≥1 unanswered |
 |---|---|---|---|
 | MeshWeaver.Reinsurance | 20 | 11 | 7 |
-| MeshWeaver.Crm | 20 | 13 | 11 |
 | MeshWeaver.SocialMedia | 20 | 11 | 10 |
 | MeshWeaver.Manufacturing | 20 | 11 | 9 |
 | MeshWeaver.Education | 20 | 11 | 11 |
@@ -1135,7 +1133,6 @@ to protection. So no repository was left with a required context that never repo
 | MeshWeaver | ruleset `2128472` | yes (as `Automatic review answered`) | n/a |
 | MeshWeaver.Plugins | classic | yes | Plugins#2727 |
 | MeshWeaver.Reinsurance | classic | yes | Reinsurance#253 |
-| MeshWeaver.Crm | classic | yes | Crm#168 |
 | MeshWeaver.SocialMedia | classic | yes | SocialMedia#239 |
 | MeshWeaver.Manufacturing | classic | yes | Manufacturing#128 |
 | MeshWeaver.Education | ruleset `19153714` | yes | Education#392 |
@@ -1166,7 +1163,6 @@ findings, 182 never answered, across 93 pull requests.**
 | MeshWeaver | 30 | 25 | **0** | 59 | **0** |
 | MeshWeaver.Plugins | 30 | 17 | 7 | 56 | 23 |
 | MeshWeaver.Education | 30 | 17 | 13 | 31 | 23 |
-| MeshWeaver.Crm | 30 | 21 | 16 | 39 | 26 |
 | MeshWeaver.Manufacturing | 30 | 17 | 15 | 28 | 25 |
 | MeshWeaver.SocialMedia | 30 | 15 | 14 | 29 | 26 |
 | MeshWeaver.Reinsurance | 30 | 14 | 10 | 30 | 21 |

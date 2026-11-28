@@ -165,7 +165,7 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     /// <b>cached for a full minute</b>. One slow read on one pod therefore made a perfectly valid key
     /// unknown to that pod for sixty seconds, and the 401 steered its owner at the wrong fix: a CI
     /// guard read it as "this instance needs a whole-source grant" while the grant was present and
-    /// unchanged (MeshWeaver.Crm run 33269921011, both jobs, passing minutes later with no change
+    /// unchanged (a satellite gate run, both jobs, passing minutes later with no change
     /// anywhere).</para>
     ///
     /// <para>So: an <see cref="NodeReadStatus.Unavailable"/> on any leg yields

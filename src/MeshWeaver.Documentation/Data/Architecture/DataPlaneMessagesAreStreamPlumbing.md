@@ -166,7 +166,7 @@ not a zero.
 | MeshWeaver.SocialMedia | **14 in-mesh callers**: every `LinkedIn/*/Source/*Loader.cs` reads its CSV through `hub.Observe<GetDataResponse>(new GetDataRequest(new FileReference("content", "archive/….csv")))` — the `FileReference` kind, which has no stream surface yet |
 | MeshWeaver.Reinsurance | 2, both under `legacy/` |
 | Memex | 0 code (2 doc comments) |
-| MeshWeaver.Crm, .Education, .FundReporting, .Manufacturing | 0 |
+| MeshWeaver.Education, .FundReporting, .Manufacturing | 0 |
 | live mesh | **not established.** `search_chunks` needs an anchored scope and cannot sweep every partition; the node `search` is semantic, so a hit list is not a literal match and an empty one would not be a zero. The control instance's MCP was unreachable (503). This sweep must be completed — literally, with `searched: true` — before step 3. |
 
 ## Moving GetMeshNode onto the node stream

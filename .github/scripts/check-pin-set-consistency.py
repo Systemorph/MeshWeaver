@@ -17,14 +17,14 @@ mismatch on a portal, pointing at nothing.
 
 MeshWeaver.Plugins and MeshWeaver.Reinsurance have carried `scripts/check-platform-pins.py`
 against exactly this since 2026-09-01. Measured 2026-09-06, MeshWeaver.SocialMedia,
-MeshWeaver.Manufacturing and MeshWeaver.Crm had **zero matches** for any such gate:
+MeshWeaver.Manufacturing and a third satellite had **zero matches** for any such gate:
 
     repo                       pin-consistency gate      literal pin sites a move must pass
     MeshWeaver.Plugins         yes                       14
     MeshWeaver.Reinsurance     yes                       12
     MeshWeaver.SocialMedia     NONE                       4
     MeshWeaver.Manufacturing   NONE                       3
-    MeshWeaver.Crm             NONE                       4
+    (a third satellite)        NONE                       4
 
 🚨 That is not a gate that SKIPS. It is a gate that does not exist, so there is nothing to notice.
 The precedent is on record and it was expensive: a withdrawal that took a line it did not add

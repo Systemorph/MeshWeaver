@@ -439,7 +439,6 @@ public class PlatformBakeLaneGuard
         Assert.Equal(
             new[]
             {
-                "Systemorph/MeshWeaver.Crm",
                 "Systemorph/MeshWeaver.Education",
                 "Systemorph/MeshWeaver.Manufacturing",
                 "Systemorph/MeshWeaver.Reinsurance",

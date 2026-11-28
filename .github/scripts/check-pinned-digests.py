@@ -148,7 +148,7 @@ ASSIGN_RE = re.compile(
 # 🚨 IT MATCHES AN ATTEMPTED DIGEST, NOT A WELL-FORMED ONE. Requiring `[0-9a-f]{64}` here made the
 # vacuity guard below a promise this shape did not keep: `image-digest=sha256:PLACEHOLDER` matched
 # NOTHING and read as "no pin present" — in the exact shape MeshWeaver.SocialMedia and
-# MeshWeaver.Crm write their tester pin, so two of the six pinning repositories were exempt from
+# another satellite wrote their tester pin, so two of the six pinning repositories were exempt from
 # the guard while the docstring said none were. Measured 2026-09-06 while building
 # check-pin-set-consistency.py (MeshWeaver#3454), whose first draft reproduced the same hole.
 # Classification into pin / MALFORMED happens once, below, for both shapes.
@@ -261,7 +261,7 @@ gh_api = ghrest.gh_cli
 def discover_repos() -> list[str]:
     """Every repository the App installation reaches.
 
-    Discovery rather than a committed list is the whole point: MeshWeaver.Crm pins the same tester
+    Discovery rather than a committed list is the whole point: a repository pinning the same tester
     digest as Plugins, Manufacturing and SocialMedia and is absent from `.github/shared-rules.json`'s
     `repos` array — so a check keyed on that list would have reported a fleet of six while a seventh
     sat unswept. A repository that pins nothing costs one API call and shows up in the denominator

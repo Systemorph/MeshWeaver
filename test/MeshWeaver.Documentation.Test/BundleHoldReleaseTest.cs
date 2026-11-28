@@ -26,7 +26,7 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class BundleHoldReleaseTest
 {
-    private static readonly RepoIdentity Crm = new("Systemorph", "MeshWeaver.Crm");
+    private static readonly RepoIdentity Crm = new("Systemorph", "MeshWeaver.Plugins");
     private const string Identity = "sb43f9287dbd6922a7937bd24be103937";
     private const string OtherIdentity = "sffffffffffffffffffffffffffffffff";
     private const string SealedCommit = "76cdb553bd256f6cbc4b27caea5f139505787790";
@@ -39,7 +39,7 @@ public class BundleHoldReleaseTest
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
 
     private static SealedSource Sealed() =>
-        new("crm", "Systemorph/MeshWeaver.Crm", SealedCommit, true, null);
+        new("crm", "Systemorph/MeshWeaver.Plugins", SealedCommit, true, null);
 
     /// <summary>🚨 The state a held source is IN: behind the seal, and already carrying a final
     /// verdict at the sealed commit — so the settled shortcut is live and the ONLY thing that can
@@ -56,7 +56,7 @@ public class BundleHoldReleaseTest
     private static GitHubSyncConfig Held(params BundleHeldNodeType[] held)
         => Settled(new GitHubSyncConfig
         {
-            RepositoryUrl = "https://github.com/Systemorph/MeshWeaver.Crm",
+            RepositoryUrl = "https://github.com/Systemorph/MeshWeaver.Plugins",
             Branch = "main",
             LastSyncCommitSha = OlderCommit,
             BundleHeldNodeTypes = [..held],
@@ -71,7 +71,7 @@ public class BundleHoldReleaseTest
             $$"""{"path":"{{h.Path}}","heldFingerprint":"0000000000000000","wantedFingerprint":"{{h.Wanted}}","identity":"{{Identity}}","reason":"held before the flag existed"}"""));
         var json = $$"""
             {
-              "repositoryUrl": "https://github.com/Systemorph/MeshWeaver.Crm",
+              "repositoryUrl": "https://github.com/Systemorph/MeshWeaver.Plugins",
               "branch": "main",
               "lastSyncCommitSha": "{{OlderCommit}}",
               "bundleHeldNodeTypes": [{{entries}}]

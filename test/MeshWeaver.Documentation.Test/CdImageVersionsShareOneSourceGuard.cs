@@ -189,8 +189,8 @@ public class CdImageVersionsShareOneSourceGuard
     {
         var register = PluginRefs().Where(x => x.InSatelliteCompat).ToList();
 
-        Assert.True(register.Count >= 5,
-            $"Expected the satellite-compat matrix in {Workflow} to name at least the five satellites; "
+        Assert.True(register.Count >= 4,
+            $"Expected the satellite-compat matrix in {Workflow} to name at least the four satellites; "
             + $"found {register.Count}. Either the job was renamed or its register moved — in both "
             + "cases the exemption in EveryPluginCheckoutUsesTheCommitTheGateResolved excuses nothing "
             + "and this guard checks nothing.");
