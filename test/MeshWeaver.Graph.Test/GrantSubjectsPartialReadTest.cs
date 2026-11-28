@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -22,13 +23,14 @@ public class GrantSubjectsPartialReadTest
         Query = ParsedQuery.Empty,
     };
 
-    private static GrantSubjectsQueryProvider.Folded Fold(params QueryResultChange<MeshNode>[] frames)
-        => GrantSubjectsQueryProvider.Rows(frames.ToObservable()).LastAsync().Wait();
+    private static Task<GrantSubjectsQueryProvider.Folded> Fold(params QueryResultChange<MeshNode>[] frames)
+        => GrantSubjectsQueryProvider.Rows(frames.ToObservable()).LastAsync()
+            .Await(TestContext.Current.CancellationToken);
 
     [Fact]
-    public void ASnapshotIncompleteFrame_IsCarriedToTheEmittedChange()
+    public async Task ASnapshotIncompleteFrame_IsCarriedToTheEmittedChange()
     {
-        var folded = Fold(Frame(QueryChangeType.Initial, User("a")) with
+        var folded = await Fold(Frame(QueryChangeType.Initial, User("a")) with
         {
             SnapshotIncomplete = true,
             SilentProviders = ["Postgres"],
@@ -41,9 +43,9 @@ public class GrantSubjectsPartialReadTest
     }
 
     [Fact]
-    public void Scores_AreCarriedAlignedWithTheItems()
+    public async Task Scores_AreCarriedAlignedWithTheItems()
     {
-        var folded = Fold(Frame(QueryChangeType.Initial, User("a"), User("b")) with { Scores = [0.2, 0.9] });
+        var folded = await Fold(Frame(QueryChangeType.Initial, User("a"), User("b")) with { Scores = [0.2, 0.9] });
 
         var emitted = GrantSubjectsQueryProvider.Diff<MeshNode>(null, folded, ParsedQuery.Empty).Single();
 
@@ -51,10 +53,10 @@ public class GrantSubjectsPartialReadTest
     }
 
     [Fact]
-    public void ACompletenessChangeAlone_IsAnnouncedAsAnEmptyUpdate()
+    public async Task ACompletenessChangeAlone_IsAnnouncedAsAnEmptyUpdate()
     {
-        var before = Fold(Frame(QueryChangeType.Initial, User("a")));
-        var after = Fold(
+        var before = await Fold(Frame(QueryChangeType.Initial, User("a")));
+        var after = await Fold(
             Frame(QueryChangeType.Initial, User("a")),
             Frame(QueryChangeType.Updated) with { SnapshotIncomplete = true });
 
@@ -66,9 +68,9 @@ public class GrantSubjectsPartialReadTest
     }
 
     [Fact]
-    public void ARestart_ForgetsThePreviousFramesIncompleteness()
+    public async Task ARestart_ForgetsThePreviousFramesIncompleteness()
     {
-        var folded = Fold(
+        var folded = await Fold(
             Frame(QueryChangeType.Initial, User("a")) with { SnapshotIncomplete = true },
             Frame(QueryChangeType.Reset, User("a")));
 
@@ -76,10 +78,10 @@ public class GrantSubjectsPartialReadTest
     }
 
     [Fact]
-    public void AReRankOfTheSameRows_IsAnnouncedAsAnUpdate()
+    public async Task AReRankOfTheSameRows_IsAnnouncedAsAnUpdate()
     {
-        var before = Fold(Frame(QueryChangeType.Initial, User("a"), User("b")) with { Scores = [0.2, 0.9] });
-        var after = Fold(
+        var before = await Fold(Frame(QueryChangeType.Initial, User("a"), User("b")) with { Scores = [0.2, 0.9] });
+        var after = await Fold(
             Frame(QueryChangeType.Initial, User("a"), User("b")) with { Scores = [0.2, 0.9] },
             Frame(QueryChangeType.Updated, User("a"), User("b")) with { Scores = [0.8, 0.9] });
 
@@ -91,9 +93,9 @@ public class GrantSubjectsPartialReadTest
     }
 
     [Fact]
-    public void APartialRanking_EmitsNoScoresRatherThanZeros()
+    public async Task APartialRanking_EmitsNoScoresRatherThanZeros()
     {
-        var folded = Fold(
+        var folded = await Fold(
             Frame(QueryChangeType.Initial, User("a")) with { Scores = [0.5] },
             Frame(QueryChangeType.Added, User("b")));
 
