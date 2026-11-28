@@ -6582,12 +6582,10 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// The post options of a <see cref="ValidateDeleteRequest"/> leg. Both producers (the pre-flight
-    /// fan-out and the owner-turn version check) ride a <c>ShuttingDown</c> answer out through
-    /// <see cref="RideOutRecyclingLeaf{T}"/> and ask the address's next activation, so the request
-    /// is stamped <see cref="PostOptions.ReasksOnShutdown"/>: a leaf disposed while the request sat
-    /// behind its initialization gates (a retire sweep, a recycle) is then teardown-normal at Debug,
-    /// not the stranded-work Error of the <c>[DISPOSE-DISCARD]</c> site (#8645).
+    /// The post options of a <see cref="ValidateDeleteRequest"/> leg: targeted at <paramref name="path"/>
+    /// and stamped <see cref="PostOptions.ReasksOnShutdown"/>, because both producers re-ask a
+    /// <c>ShuttingDown</c> answer on the address's next activation, so the discard is teardown-normal
+    /// (#8645).
     /// </summary>
     internal static PostOptions ValidateDeleteOptions(PostOptions o, string path, AccessContext? callerAccessContext)
     {
