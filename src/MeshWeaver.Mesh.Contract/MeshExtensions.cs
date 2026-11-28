@@ -3814,9 +3814,7 @@ public static class MeshExtensions
             .Defer(() =>
             {
                 sealLease?.MarkAsked();
-                return issuingHub.Observe(ask, o => callerAccessContext is null
-                    ? o.WithTarget(new Address(path))
-                    : o.WithTarget(new Address(path)).WithAccessContext(callerAccessContext));
+                return issuingHub.Observe(ask, o => ValidateDeleteOptions(o, path, callerAccessContext));
             })
             .Take(1);
 
@@ -6584,6 +6582,20 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// The post options of a <see cref="ValidateDeleteRequest"/> leg. Both producers (the pre-flight
+    /// fan-out and the owner-turn version check) ride a <c>ShuttingDown</c> answer out through
+    /// <see cref="RideOutRecyclingLeaf{T}"/> and ask the address's next activation, so the request
+    /// is stamped <see cref="PostOptions.ReasksOnShutdown"/>: a leaf disposed while the request sat
+    /// behind its initialization gates (a retire sweep, a recycle) is then teardown-normal at Debug,
+    /// not the stranded-work Error of the <c>[DISPOSE-DISCARD]</c> site (#8645).
+    /// </summary>
+    internal static PostOptions ValidateDeleteOptions(PostOptions o, string path, AccessContext? callerAccessContext)
+    {
+        o = o.WithTarget(new Address(path)).ReaskingOnShutdown();
+        return callerAccessContext is null ? o : o.WithAccessContext(callerAccessContext);
+    }
+
+    /// <summary>
     /// 🚨 RIDE OUT A RECYCLING LEAF — the rider both halves of a recursive delete use for a leg
     /// that answers <see cref="ErrorType.ShuttingDown"/>.
     ///
@@ -6771,9 +6783,7 @@ public static class MeshExtensions
                 // owner's [RequiresPermission(Delete)] gate denies. The original
                 // request's AccessContext carries the caller's full identity + roles,
                 // captured at handler entry where AsyncLocal was correct.
-                .Observe(new ValidateDeleteRequest(p, rootPath), o => callerAccessContext is null
-                    ? o.WithTarget(new Address(p))
-                    : o.WithTarget(new Address(p)).WithAccessContext(callerAccessContext)))
+                .Observe(new ValidateDeleteRequest(p, rootPath), o => ValidateDeleteOptions(o, p, callerAccessContext)))
             .Take(1);
 
         var perPath = descendants.Select(p =>
