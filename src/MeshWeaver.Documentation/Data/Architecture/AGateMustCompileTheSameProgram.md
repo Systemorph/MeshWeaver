@@ -226,7 +226,7 @@ The first version restored inside each directory's first build, so on a cold run
 started at the same moment. The restore touches state shared across processes: the CLI's first-use
 setup and the NuGet caches. One build of that first wave then exited 1 with nothing on its output.
 It happened in compatibility leg after compatibility leg on main CD (for example run 40925753083:
-Reinsurance, SocialMedia and Crm). The same sets built clean in the same job's second, warm
+Reinsurance and SocialMedia). The same sets built clean in the same job's second, warm
 invocation. Because the new image is always compiled first, the red always read as "this core build
 broke the satellite".
 

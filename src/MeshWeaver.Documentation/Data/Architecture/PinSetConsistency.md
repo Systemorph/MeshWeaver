@@ -181,14 +181,14 @@ fetched at each repo's existing `MW_PLATFORM_REF`: that value is older than the 
 
 Measured 2026-09-06 — every column a fact about the repository, not about the gate:
 
-| | SocialMedia | Manufacturing | Crm |
-|---|---|---|---|
-| digest pin sites / classified | 3 / 3 | 3 / 3 | 3 / 3 |
-| how the **tester** pin is written | `$GITHUB_OUTPUT` step output | `env: MW_IMAGE_DIGEST` | `$GITHUB_OUTPUT` step output |
-| `MW_PLATFORM_REF` declared | yes (`1b5350d5`) | **no** | **no** |
-| lane passing a literal `platform-ref:` | 1 (module-pack) | **0** | 1 (validate) |
-| platform lane calls | 8 | 4 | 6 |
-| calls `node-repo-validate.yml` | yes | **no — hand-rolled** | yes |
+| | SocialMedia | Manufacturing |
+|---|---|---|
+| digest pin sites / classified | 3 / 3 | 3 / 3 |
+| how the **tester** pin is written | `$GITHUB_OUTPUT` step output | `env: MW_IMAGE_DIGEST` |
+| `MW_PLATFORM_REF` declared | yes (`1b5350d5`) | **no** |
+| lane passing a literal `platform-ref:` | 1 (module-pack) | **0** |
+| platform lane calls | 8 | 4 |
+| calls `node-repo-validate.yml` | yes | **no — hand-rolled** |
 
 So **I3 and I8 have nothing to compare in Manufacturing today**, and the printed denominator says
 so rather than the verdict quietly reading "consistent". That is the denominator rule doing its
@@ -252,7 +252,7 @@ MeshWeaver.Manufacturing   placeholder tester pin   RED  ✅
 MeshWeaver.SocialMedia     placeholder tester pin   GREEN ❌
 ```
 
-Manufacturing writes its tester pin as an `env:` key; SocialMedia and Crm write theirs into a
+Manufacturing writes its tester pin as an `env:` key; SocialMedia writes its own into a
 `$GITHUB_OUTPUT`. The first draft's step-output pattern required a well-formed
 `sha256:[0-9a-f]{64}`, so `image-digest=sha256:PLACEHOLDER` matched **nothing** and read as "no pin
 present" — **the exact vacuity trap the gate exists to close, reproduced inside it, in the shape the

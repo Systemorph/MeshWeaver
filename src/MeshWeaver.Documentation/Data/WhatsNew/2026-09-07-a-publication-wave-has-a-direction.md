@@ -10,7 +10,7 @@ Order: -20260907
 
 When a node repository seals a bundle publication, its build lane registers the record with the
 control instance, which wakes the repositories that must rebake against it. On 2026-09-07 that wake
-went to the whole fleet, the publisher included: Crm published, memex woke Crm and Reinsurance, both
+went to the whole fleet, the publisher included: a satellite published, memex woke it and Reinsurance, both
 rebaked the same inputs and registered the same digest, and memex woke both again — a run on each
 repository every few seconds, the GitHub App's API limit exhausted, and the organisation's Actions
 queue backed up behind the storm.

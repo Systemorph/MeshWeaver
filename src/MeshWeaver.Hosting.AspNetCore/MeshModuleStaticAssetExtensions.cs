@@ -37,11 +37,10 @@ namespace MeshWeaver.Hosting.AspNetCore;
 /// </list>
 ///
 /// <para><b>Startup-time only, deliberately.</b> Assets are discovered from the folders present when
-/// the app starts. A module installed at RUNTIME (a Store package) is not served until the next
-/// start — the same concession the module loader itself already makes, since
-/// <c>MeshBuilder.InstallAssemblies</c> is boot-only by construction and ASP.NET Core cannot accept
-/// new static-asset endpoints after the <see cref="WebApplication"/> is built. Restart-as-activation
-/// is the contract; inventing a second, dynamic mechanism here would outrun the loader it serves.</para>
+/// the app starts. A module adopted at RUNTIME (a bundle landed after boot, a live swap) IS served:
+/// <see cref="AddMeshModuleStaticAssets"/> registers a <see cref="ModuleStaticAssetSource"/> that re-resolves the
+/// mounts from the loaded module set whenever <c>ModuleContexts.Version</c> moves, and the middleware
+/// answers each <c>/_content</c> request from the current set, so no restart is needed.</para>
 /// </summary>
 public static partial class MeshModuleStaticAssetExtensions
 {
@@ -80,11 +79,44 @@ public static partial class MeshModuleStaticAssetExtensions
     /// <param name="services">The service collection to register on.</param>
     /// <returns>The same <paramref name="services"/> for chaining.</returns>
     public static IServiceCollection AddMeshModuleStaticAssets(this IServiceCollection services)
-        => services.AddSingleton(sp => Discover(
-            sp.GetServices<InstalledModuleAssembly>(),
-            sp.GetRequiredService<IWebHostEnvironment>(),
-            sp.GetRequiredService<ILoggerFactory>()
-                .CreateLogger(typeof(MeshModuleStaticAssetExtensions))));
+    {
+        // LIVE, not boot-only: the source re-resolves what the modules contribute whenever the
+        // held-module registry moves (a bundle adopted AFTER boot, a live swap), so a module that
+        // arrives later serves its wwwroot without a restart. The manifest is a transient view of
+        // the source's CURRENT answer, so a consumer that injects it (the stylesheet links) sees
+        // the module set as it is now rather than as it was at first resolution.
+        services.AddSingleton(sp =>
+        {
+            var installed = sp.GetServices<InstalledModuleAssembly>().ToArray();
+            var held = sp.GetService<ModuleContexts>();
+            var environment = sp.GetRequiredService<IWebHostEnvironment>();
+            var logger = sp.GetRequiredService<ILoggerFactory>()
+                .CreateLogger(typeof(MeshModuleStaticAssetExtensions));
+            return new ModuleStaticAssetSource(
+                () => held?.Version ?? 0,
+                () => Discover(CurrentModules(installed, held), environment, logger));
+        });
+        services.AddTransient(sp => sp.GetRequiredService<ModuleStaticAssetSource>().Current);
+        return services;
+    }
+
+    /// <summary>
+    /// The modules as they are NOW: every boot-installed assembly, with a module held in its own
+    /// load context represented by its CURRENT generation (which replaces the boot assembly of the
+    /// same name, and adds a module that was adopted after boot).
+    /// </summary>
+    internal static IEnumerable<InstalledModuleAssembly> CurrentModules(
+        IEnumerable<InstalledModuleAssembly> installed, ModuleContexts? held)
+    {
+        var generations = held?.Generations
+            .OrderBy(g => g.Name, StringComparer.Ordinal)
+            .ToArray() ?? [];
+        var heldNames = generations.Select(g => g.Name).ToHashSet(StringComparer.Ordinal);
+        return installed
+            .Where(m => !heldNames.Contains(m.Assembly.GetName().Name ?? ""))
+            .Concat(generations.Select(g => new InstalledModuleAssembly(g.Assembly)))
+            .ToArray();
+    }
 
     /// <summary>
     /// Mounts every installed module's static web assets. Call it with the host's other
@@ -116,14 +148,111 @@ public static partial class MeshModuleStaticAssetExtensions
     /// </exception>
     public static WebApplication UseMeshModuleStaticAssets(this WebApplication app)
     {
+        // A host that registered the live source (AddMeshModuleStaticAssets) resolves the mounts
+        // per request from the modules loaded NOW. A host that registered only a fixed manifest
+        // keeps the boot-time behaviour.
+        var source = app.Services.GetService<ModuleStaticAssetSource>();
+        if (source is not null)
+        {
+            ((IApplicationBuilder)app).UseLiveMeshModuleStaticAssets(source);
+            return app;
+        }
+
         var manifest = app.Services.GetService<ModuleStaticAssetManifest>()
             ?? throw new InvalidOperationException(
                 "UseMeshModuleStaticAssets() requires AddMeshModuleStaticAssets() on the service "
                 + "collection — without it the module manifest is never built, and a flipped "
                 + "module's CSS/JS would 404 at runtime with nothing in the log to say why.");
 
+        AddPipeline(app, manifest);
+        return app;
+    }
+
+    private sealed record LiveSnapshot(long Stamp, ModuleStaticAssetManifest Manifest, RequestDelegate? Pipeline);
+
+    /// <summary>The request-item flag a live branch sets when nothing in it answered.</summary>
+    private const string PassThroughKey = "MeshWeaver.ModuleStaticAssets.PassThrough";
+
+    /// <summary>
+    /// Mounts the module static assets resolved PER REQUEST from <paramref name="source"/>: a
+    /// request under <c>/_content</c> runs through a pipeline built for the source's current
+    /// manifest, rebuilt (thread-safely, no restart) the moment the manifest changes. Anything the
+    /// pipeline does not answer falls through to the rest of the host.
+    /// </summary>
+    internal static IApplicationBuilder UseLiveMeshModuleStaticAssets(
+        this IApplicationBuilder app, ModuleStaticAssetSource source)
+    {
+        var gate = new object();
+        LiveSnapshot? built = null;
+        var liveLogger = app.ApplicationServices.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(MeshModuleStaticAssetExtensions));
+
+        RequestDelegate? PipelineFor(long stamp, ModuleStaticAssetManifest manifest)
+        {
+            var seen = Volatile.Read(ref built);
+            // A reader that fetched its manifest before an adoption can arrive AFTER the fresher
+            // pipeline was stored: it is answered by the fresher one (never rebuilt, never
+            // overwriting it), so a burst straddling an adoption cannot thrash the single slot.
+            if (seen is not null && (ReferenceEquals(seen.Manifest, manifest) || seen.Stamp > stamp))
+                return seen.Pipeline;
+            lock (gate)
+            {
+                seen = built;
+                if (seen is not null && (ReferenceEquals(seen.Manifest, manifest) || seen.Stamp > stamp))
+                    return seen.Pipeline;
+                RequestDelegate? pipeline = null;
+                if (manifest.Mounts.Count > 0)
+                {
+                    var branch = app.New();
+                    AddPipeline(branch, manifest);
+                    branch.Run(context =>
+                    {
+                        context.Items[PassThroughKey] = true;
+                        return Task.CompletedTask;
+                    });
+                    pipeline = branch.Build();
+                }
+                Volatile.Write(ref built, new LiveSnapshot(stamp, manifest, pipeline));
+                return pipeline;
+            }
+        }
+
+        return app.Use(async (context, next) =>
+        {
+            if (!context.Request.Path.StartsWithSegments("/" + ContentRoot))
+            {
+                await next();
+                return;
+            }
+            RequestDelegate? pipeline;
+            try
+            {
+                var (stamp, manifest) = source.CurrentStamped;
+                pipeline = PipelineFor(stamp, manifest);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A rebuild that raced a live swap (a generation unloaded mid-scan) must not turn
+                // a /_content request into a 500: fall through to the host, and the next request
+                // re-resolves once the stamp settles.
+                liveLogger?.LogWarning(ex, "[ModuleStaticAssets] resolving the live manifest failed; falling through to the host");
+                pipeline = null;
+            }
+            if (pipeline is null)
+            {
+                await next();
+                return;
+            }
+            await pipeline(context);
+            if (context.Items.Remove(PassThroughKey))
+                await next();
+        });
+    }
+
+    private static void AddPipeline(IApplicationBuilder app, ModuleStaticAssetManifest manifest)
+    {
         if (manifest.Mounts.Count == 0)
-            return app;
+            return;
 
         var mounts = manifest.Mounts
             .Select(mount => (
@@ -196,8 +325,6 @@ public static partial class MeshModuleStaticAssetExtensions
                     served.Context.Response.Headers.CacheControl = RevalidateCacheControl;
                 },
             });
-
-        return app;
     }
 
     /// <summary>
@@ -672,3 +799,58 @@ public sealed record ModuleStaticAssetManifest(
 /// <c>no-cache</c>, because a module upgrade changes what the plain URL means.
 /// </param>
 public sealed record ModuleStylesheetResponse(string Body, bool Immutable);
+
+/// <summary>
+/// The module static-asset manifest, kept CURRENT: <see cref="Current"/> re-resolves it whenever
+/// the stamp (the held-module registry's version) moves, so a module adopted after boot is served
+/// without a restart. Thread-safe; an unchanged stamp costs one volatile read, and nothing is
+/// re-resolved without a changed input.
+/// </summary>
+public sealed class ModuleStaticAssetSource
+{
+    private readonly Func<long> stamp;
+    private readonly Func<ModuleStaticAssetManifest> build;
+    private readonly object gate = new();
+    private Snapshot? cached;
+
+    private sealed record Snapshot(long Stamp, ModuleStaticAssetManifest Manifest);
+
+    /// <summary>Creates the source.</summary>
+    /// <param name="stamp">Moves whenever what the modules contribute can have changed.</param>
+    /// <param name="build">Resolves the manifest from the modules loaded now.</param>
+    public ModuleStaticAssetSource(Func<long> stamp, Func<ModuleStaticAssetManifest> build)
+    {
+        this.stamp = stamp;
+        this.build = build;
+    }
+
+    /// <summary>The manifest for the modules loaded now.</summary>
+    public ModuleStaticAssetManifest Current => CurrentStamped.Manifest;
+
+    /// <summary>
+    /// The manifest for the modules loaded now, with the stamp it was built at. The stamp is
+    /// monotonic (the registry's version only ever increments), so a consumer that caches per
+    /// manifest can tell a stale reader's older answer from a fresher cached one.
+    /// </summary>
+    internal (long Stamp, ModuleStaticAssetManifest Manifest) CurrentStamped
+    {
+        get
+        {
+            var now = stamp();
+            var seen = Volatile.Read(ref cached);
+            if (seen is not null && seen.Stamp == now)
+                return (seen.Stamp, seen.Manifest);
+            lock (gate)
+            {
+                // Read the stamp BEFORE building: a change landing mid-build leaves the cached
+                // stamp behind, so the next read rebuilds rather than serving a stale answer.
+                now = stamp();
+                if (cached is { } again && again.Stamp == now)
+                    return (again.Stamp, again.Manifest);
+                var manifest = build();
+                Volatile.Write(ref cached, new Snapshot(now, manifest));
+                return (now, manifest);
+            }
+        }
+    }
+}

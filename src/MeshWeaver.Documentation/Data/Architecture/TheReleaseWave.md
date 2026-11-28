@@ -132,7 +132,6 @@ whole `repository_dispatch` share of the fleet's bill (≈15,000 minutes a day) 
 
 | repo | `upstream-published` runs | `framework-released` runs | core CD runs in the window |
 |---|---|---|---|
-| Crm | **23** | 0 | 41 |
 | SocialMedia | **24** | 0 | 41 |
 | Manufacturing | **23** | 0 | 41 |
 | Education | 18 | **42** — Education#320 is unmerged; `ci.yml:28` still lists the type | 41 |
@@ -142,7 +141,7 @@ The emitter is the one this page names (as measured — #6143 later removed core
 `webhook-url`, so its `register-publication` posts a `plugins` `bundle-publication` **on every core
 build** — a fresh framework identity each time, so `IsRepeat` never fires — and `DependentsOf(plugins)`
 is every satellite that declares `plugins`. Twenty of twenty core register jobs succeeded in the
-window, and each dependent's run started within seconds of one (core 06:22:40Z → Crm 06:22:41Z).
+window, and each dependent's run started within seconds of one (core 06:22:40Z → a satellite 06:22:41Z).
 So the per-build wave now wears `meshweaver-upstream-published`; only its name changed. Reinsurance's
 zero is the one anomaly — it declares `plugins crm` and lists the type, so its registration on the
 control instance is the next thing to read. Education's 42 say the `framework-released` emitter is
@@ -161,8 +160,8 @@ remaining reference is `FREEZE: ${{ vars.MW_PLATFORM_REF }}`, the incident-freez
 VARIABLE the resolver honours by design); every `uses: Systemorph/MeshWeaver/…` lane ref is `@main`
 (0 of 43 pinned to a sha); `check-platform-pins.py` is invoked nowhere. Every repository resolves the
 newest sealed set at run time with `resolve-platform.py` — and **carries its own copy of it**: seven
-copies at six distinct sizes on 2026-09-13 (core 68,150 B; Crm 69,027; Reinsurance 69,035;
-SocialMedia 69,035; Manufacturing 69,037; Plugins 60,365; Education 46,786). The reusable lanes fetch
+copies at six distinct sizes on 2026-09-13 (core 68,150 B; Reinsurance 69,035;
+SocialMedia 69,035; Manufacturing 69,037; Plugins 60,365; Education 46,786; a since-archived repo 69,027). The reusable lanes fetch
 **core's** copy at `scripts-ref` for their own resolution, so the copies decide only what a
 satellite's *own* jobs resolve — which is exactly the file the same-drift argument on Plugins#1565
 was about.
@@ -173,7 +172,7 @@ difference changes an answer on the inputs that repository passes:
 
 | copy | raw lines vs canonical | code lines | what differs | changes an answer? |
 |---|---|---|---|---|
-| Crm, Reinsurance, SocialMedia, Manufacturing, **Education** | 173 | **6** | three string literals: the `User-Agent` header value, one log line, one step-summary sentence | **no** — none is read by the resolution |
+| Reinsurance, SocialMedia, Manufacturing, **Education** | 173 | **6** | three string literals: the `User-Agent` header value, one log line, one step-summary sentence | **no** — none is read by the resolution |
 | Plugins (fork, 2026-09-12, #1694) | 1,031 | **520** | ADDS `ceiling_for`/`main_passed_ceiling`/`run_jobs_of` (a pull request resolves the newest sealed set that Plugins `main` has already PASSED on) and `PublicationSource`/`publication_source`/`ProvenanceUnavailable` (the chosen set's sha and release read from the platform-bake job's own final publication receipt); LACKS `platform_version` | **yes, by design** — on `pull_request` runs the ceiling can choose an older set than the canonical would |
 
 🚨 **Education's row is the one that moved, and #4171's own body is now stale about it.** That body

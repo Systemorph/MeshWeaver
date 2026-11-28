@@ -358,7 +358,7 @@ Phase 1 merged on 2026-09-12. Counted by job over 2026-09-12T12:00Z → 09-13T07
 
 - **The wake is still per build.** Core CD's `plugins-bake` registers a `plugins` publication on
   every core build (20 of 20 register jobs), and the control instance fans
-  `meshweaver-upstream-published` to every satellite that declares `plugins`: Crm 23, SocialMedia
+  `meshweaver-upstream-published` to every satellite that declares `plugins`: SocialMedia
   24, Manufacturing 23 runs in 19 h, one per core register-publication; Education 42
   `framework-released` on top (Education#320 unmerged). The event type changed; the run count did
   not. Detail and the per-repo table: [The Release Wave](../TheReleaseWave) → *After phase 1*.

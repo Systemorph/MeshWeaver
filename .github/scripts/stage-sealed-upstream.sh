@@ -14,7 +14,7 @@
 # moment the job started, so the verdict depended on when a queued job began: on 2026-10-17 a
 # Plugins merge raised Store's `minMeshVersion` past the newest sealed platform set and every
 # satellite bake that started after it went RED on `PackagePlatformFloorException` (Manufacturing,
-# Crm, SocialMedia, Reinsurance), while the same dispatch that started earlier was green.
+# SocialMedia, Reinsurance), while the same dispatch that started earlier was green.
 #
 # 🚨 PER PACKAGE, not per publication. A per-package seal (seal-packages.py) CARRIES a waiting
 # package's earlier build forward, so the publication commit (`source-commit.txt`) can be newer than
@@ -88,7 +88,7 @@ in_words() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # stage repo) and fetches with it well under a second later. Measured 2026-10-26 on the satellites'
 # publish bakes, same lane commit, same secret, same sealed commit: Reinsurance staged
 # MeshWeaver.Plugins@ed336b36dc at 17:56:37Z while Manufacturing's fetch of that very commit, in the
-# same second, answered `remote: Repository not found.` — and Crm, Reinsurance and Manufacturing
+# same second, answered `remote: Repository not found.` — and Reinsurance and Manufacturing
 # each went green and red on alternate attempts (8 of 12 stage steps red from 16:37Z on, 0 of 18
 # before). The token step had succeeded every time, which GitHub refuses for an installation
 # that cannot reach the named repository. So the 404 is a token whose repository grant had not
