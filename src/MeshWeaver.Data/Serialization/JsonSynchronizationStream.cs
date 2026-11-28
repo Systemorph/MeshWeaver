@@ -923,7 +923,13 @@ public static class JsonSynchronizationStream
         // keeps a per-subscriber stream alive until its heartbeat lapses. Registering on the
         // stream there preserves exactly today's behaviour for that case.
         var release = new AnonymousDisposable(
-            () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner)));
+            () =>
+            {
+                // A mirror ended by a terminal DeliveryFailure has no owner to tell, and posting
+                // would re-activate the address that just failed.
+                if (!reduced.OwnerFailed)
+                    hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner));
+            });
         if (reducedHub is not null)
             reducedHub.RegisterForDisposal(release);
         else

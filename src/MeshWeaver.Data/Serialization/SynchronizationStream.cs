@@ -355,6 +355,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// </summary>
     private int subscriberEnded;
 
+    private int ownerFailed;
+
+    /// <summary>True once a terminal <see cref="DeliveryFailure"/> ended this mirror: the owner could
+    /// not serve it, so nothing may be sent back to it — a release would re-activate a retired or
+    /// stuck address just to tell it we left.</summary>
+    internal bool OwnerFailed => Volatile.Read(ref ownerFailed) != 0;
+
     /// <summary>Whether this stream ends because its subscriber is gone — see
     /// <see cref="subscriberEnded"/>.</summary>
     internal bool SubscriberEnded => Volatile.Read(ref subscriberEnded) != 0;
@@ -1792,7 +1799,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                     }
                     return delivery.Processed();
                 }
-            ).WithStreamHandler<DeliveryFailure>(handled, (_, delivery) =>
+            ).WithStreamHandler<DeliveryFailure>(handled, (hub, delivery) =>
                 {
                     var failure = delivery.Message;
                     // 🚨 A TRANSIENT shutdown reject is NOT terminal for a sync stream. It
@@ -1822,6 +1829,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                     else
                         logger.LogWarning("Stream {StreamId} received DeliveryFailure: {Message}", StreamId, failure.Message);
                     OnError(new DeliveryFailureException(failure));
+                    Volatile.Write(ref ownerFailed, 1);
+                    // 🚨 A TERMINAL failure ends the mirror, so its sync hub is disposed with it —
+                    // exactly as for StreamErrorEvent below. Faulting the store alone left the
+                    // mirror's recovery paths (change-feed resubscribe latch, end/recycle re-arm)
+                    // registered on this hub, and a resubscribe of an infrastructure mirror is
+                    // issued as System: a faulted mirror kept re-subscribing with System rights.
+                    hub.Dispose();
                     return delivery.Processed();
                 },
                 // 🚨 AWAITED failures are excluded, and this filter is the #3986 half nobody had
