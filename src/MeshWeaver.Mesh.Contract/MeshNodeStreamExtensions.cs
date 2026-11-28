@@ -1669,7 +1669,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// its change notification are off-turn, so under a write burst the notification LAGS the
     /// in-RAM commit; re-applying that stale snapshot silently dropped every field added since
     /// it was persisted (<c>CrossHubPatchAtomicityTest</c>). At or below the live version this
-    /// completes with the unchanged node and touches nothing.</para>
+    /// completes with the unchanged node and touches nothing. The one exception is a LATER INCARNATION
+    /// (a persisted <see cref="MeshNode.CreatedDate"/> after the live node's): a node deleted and created
+    /// again restarts at version 1, and that recreate is adopted.</para>
     ///
     /// <para>🚨 NOT <c>AdoptDurableTruth</c> (<c>MeshDataSource</c>), which is the opposite case:
     /// there a write was REFUSED by the monotonic guard, so the owner must climb strictly ABOVE
@@ -1696,6 +1698,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             $"MeshNodeStreamHandle.AdoptPersisted(path='{_path ?? "<own>"}')",
             _workspace.Hub.ServiceProvider);
     }
+
+    /// <summary>True when <paramref name="persisted"/> is a LATER incarnation of the path than
+    /// <paramref name="live"/> — created after it (microsecond precision, the precision every store
+    /// keeps). A node with no creation date has no known incarnation and is never "later".</summary>
+    private static bool IsLaterIncarnation(MeshNode persisted, MeshNode live)
+        => persisted.CreatedDate != default && live.CreatedDate != default
+           && StorageIncarnation.Normalize(persisted.CreatedDate) > StorageIncarnation.Normalize(live.CreatedDate);
 
     /// <summary>
     /// The caller's AUTHENTICATED context, captured synchronously on the caller's thread — the
@@ -1879,7 +1888,17 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // already moved past): a persisted snapshot may replace in-RAM state only
                             // when it is STRICTLY NEWER. A lagged echo of our own write completes with
                             // the unchanged node, so the in-RAM stream only ever moves forward.
-                            if (updated.Version <= current.Version)
+                            //
+                            // 🚨 …by INCARNATION, then by version. A delete ends a node's identity and
+                            // a create after it is a NEW incarnation whose counter restarts at 1, so
+                            // its version is lower than the deleted node's. The incarnation is the
+                            // node's CreatedDate (set once at creation, kept by every update — the
+                            // marker the store's guarded delete already uses): a persisted row whose
+                            // CreatedDate is LATER than the live node's is a recreate and is adopted
+                            // whatever its version; the same incarnation at a lower version is still
+                            // a lagged echo, and an EARLIER incarnation never replaces a later one.
+                            if (updated.Version <= current.Version
+                                && !IsLaterIncarnation(updated, current))
                             {
                                 EmitOnce(current);
                                 return null;
