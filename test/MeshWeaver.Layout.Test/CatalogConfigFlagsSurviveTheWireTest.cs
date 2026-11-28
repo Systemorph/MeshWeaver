@@ -11,7 +11,7 @@ namespace MeshWeaver.Layout.Test;
 /// CLR default. So an explicit <c>false</c> was DROPPED and the reader re-applied the initializer:
 /// the flags could be turned on, never off.
 ///
-/// <para>Measured 2026-08-29 on MeshWeaver.Crm's activity feed: it asked for
+/// <para>Measured 2026-08-29 on the CRM's activity feed: it asked for
 /// <c>Ascending = false</c> (newest first) and the payload carried no <c>ascending</c> at all, so
 /// the portal rendered oldest-first. Nothing errored — the intent simply evaporated between the two
 /// sides.</para>

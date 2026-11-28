@@ -69,7 +69,7 @@ CONTRAST_ALLOW_FILE = "cover-contrast.allow"
 # three variants in 17 days: the heroCta contrast check reached ONE of them. Never re-grow a
 # local copy; a repo-specific need is an argument or an allow-file, not a fork.
 #
-# `WhatsNew` is here from MeshWeaver.Crm's copy: a `WhatsNew/` root is release notes, not a
+# `WhatsNew` is here because a `WhatsNew/` root is release notes, not a
 # plugin, and must not be read as a cover if it ever carries an index.json.
 SKIP = {"WhatsNew", ".git", ".github", ".worktrees", "scripts", "e2e", "src", "clients", "app",
         "node_modules", "legacy", "content"}

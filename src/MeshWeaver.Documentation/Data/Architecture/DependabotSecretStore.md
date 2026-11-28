@@ -55,7 +55,6 @@ actively misleading on a Dependabot run.
 | MeshWeaver.Plugins | 12 | 4 | `ACR_PUSH_PASSWORD`, `ACR_PUSH_USERNAME`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`, `MESHWEAVER_REPO_TOKEN`, `PLATFORM_WEBHOOK_SECRET`, `REGISTRY_PUBLISH_TOKEN` |
 | MeshWeaver.Reinsurance | 10 | 4 | `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`, `MESHWEAVER_REPO_TOKEN`, `MW_REGISTRY_KEY`, `PLATFORM_WEBHOOK_SECRET` |
 | MeshWeaver.SocialMedia | 11 | 4 | the six above **+** `REGISTRY_PUBLISH_TOKEN` |
-| MeshWeaver.Crm | 9 | 4 | `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`, `MW_REGISTRY_KEY`, `PLATFORM_WEBHOOK_SECRET` |
 | MeshWeaver.Manufacturing | 9 | 5 | `ACR_PASSWORD`, `ACR_USERNAME`, `MW_REGISTRY_INSTANCE_KEY`, `PLATFORM_WEBHOOK_SECRET` |
 | MeshWeaver.Education | 9 | 2 | `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`, `MESHWEAVER_APP_ID`, `MESHWEAVER_APP_PRIVATE_KEY`, `MW_REGISTRY_KEY`, `PLATFORM_WEBHOOK_SECRET` |
 | Memex | 8 | **0** | all 8 |
@@ -92,7 +91,6 @@ caller passes into a shared `workflow_call` lane. Measured that way on 2026-09-0
 | MeshWeaver.Manufacturing | `ACR_USERNAME`, `ACR_PASSWORD`, `MW_REGISTRY_INSTANCE_KEY` | **measured red** — run 33357319017, `Required CI inputs` names all three |
 | MeshWeaver.SocialMedia | `REGISTRY_PUBLISH_TOKEN`, `MW_REGISTRY_KEY` | `REGISTRY_PUBLISH_TOKEN` **measured red** (run 33354469022); `MW_REGISTRY_KEY` reaches `compile-check` and `test-repos` and no preflight asked for it |
 | MeshWeaver.Reinsurance | `MW_REGISTRY_KEY` | **measured red** at `compile-check` (above). Its `AZURE_*` triple was mirrored on 2026-09-06 |
-| MeshWeaver.Crm | `MW_REGISTRY_KEY` | **latent, not a control** — same `compile-check` / `test-repos` path as Reinsurance, same absent key. Its preflight does not assert it, which is why it looked clean |
 | MeshWeaver.Education | `MW_REGISTRY_KEY` | **latent** — the `e2e-*` jobs consume it whenever `changes.outputs.mesh` is true; its preflight asserts only the registry user/password |
 | MeshWeaver.Plugins | `REGISTRY_PUBLISH_TOKEN` | **latent** — passed into `modules-floor`/`modules-rest`, whose publish step is `if: inputs.publish` (false on a PR), so it is unused today and its emptiness is not yet fatal |
 | MeshWeaver | `MESHWEAVER_APP_PRIVATE_KEY` | **latent** — `auto-arm` and `merge-queue-steward` both run on a Dependabot PR and both assert the App credential. `dotnet-test.yml`'s two credentialed gates are actor-exempted instead (below) |
@@ -381,7 +379,6 @@ Every repository measured `0 missing` afterwards with
 | MeshWeaver.Plugins | `REGISTRY_PUBLISH_TOKEN` | 2 | keyvault, hash-verified vs the running registry |
 | MeshWeaver.SocialMedia | `REGISTRY_PUBLISH_TOKEN`, `MW_REGISTRY_KEY` | 2, 3 | keyvault; new instance `dependabot-socialmedia` |
 | MeshWeaver.Reinsurance | `MW_REGISTRY_KEY` | 3 | new instance `dependabot-reinsurance` |
-| MeshWeaver.Crm | `MW_REGISTRY_KEY` | 3 | new instance `dependabot-crm` |
 | MeshWeaver.Education | `MESHWEAVER_APP_ID`, `MESHWEAVER_APP_PRIVATE_KEY`, `MW_REGISTRY_KEY` | 1, 2, 3 | public id; keyvault; new instance `dependabot-education` |
 | MeshWeaver.Manufacturing | `ACR_USERNAME`, `ACR_PASSWORD`, `MW_REGISTRY_INSTANCE_KEY` | 3 | new ACR token `manufacturing-dependabot-pull` on the existing `manufacturing-ci-pull-scope-map`; new instance `dependabot-manufacturing` |
 | Memex | `MESHWEAVER_APP_PRIVATE_KEY` | 2 | keyvault, JWT-verified |

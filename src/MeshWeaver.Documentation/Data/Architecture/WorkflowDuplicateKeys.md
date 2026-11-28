@@ -31,7 +31,7 @@ made [gen-manifests.py the platform's canonical checker](../ModuleBuildArchitect
 caller's `validate:` job needed a `with:` block. The patcher located the job's end with
 `s.index("\n  ", i)` — a pattern that also matches `"\n    with:"`, because that string starts with
 a newline and two spaces. So it cut the block after `uses:` and **appended a second `with:`**, in
-MeshWeaver.Education and MeshWeaver.Crm.
+MeshWeaver.Education and one more satellite.
 
 `yaml.safe_load` accepted it. The `uses:` sha had moved to the new lane and the effective
 `platform-ref` had not, so the lane would have fetched its central guard scripts — *and the
@@ -42,18 +42,18 @@ before pushing by reading the rendered block, not by any gate.
 
 [Pin Set Consistency](../PinSetConsistency) (`Platform pins name one build`) models the
 *consequence* — a `uses:` sha and a `platform-ref` that disagree — and does red on it. Its report on
-a real instance of the *outcome*, MeshWeaver.Crm#62, run `34083378598`:
+a real instance of the *outcome*, a satellite Dependabot pull request, run `34083378598`:
 
-> `MeshWeaver.Crm — ci.yml:362 calls .github/workflows/node-repo-validate.yml@c7fef7a2… but passes platform-ref 0a2b9017… (line 367).`
+> `<satellite> — ci.yml:362 calls .github/workflows/node-repo-validate.yml@c7fef7a2… but passes platform-ref 0a2b9017… (line 367).`
 
-🚨 **That PR is a different mechanism with the same signature.** Crm#62 is a Dependabot bump whose
+🚨 **That PR is a different mechanism with the same signature.** It is a Dependabot bump whose
 whole diff is `+1/-1` on `ci.yml`: it moved the `uses:` line and left `platform-ref` alone. No
 duplicate key involved. It is evidence that this *class of stale-pin outcome reaches main's queue
 routinely* — not evidence that anything detects duplicate keys.
 
 | | Covered before #3579 |
 |---|---|
-| a duplicate key whose effect is a **pin mismatch** | only where `Platform pins name one build` is a **required** context — measured 2026-09-07: MeshWeaver.SocialMedia and MeshWeaver.Crm **yes**; MeshWeaver.Reinsurance and MeshWeaver.Education **no** |
+| a duplicate key whose effect is a **pin mismatch** | only where `Platform pins name one build` is a **required** context — measured 2026-09-07: MeshWeaver.SocialMedia **yes**; MeshWeaver.Reinsurance and MeshWeaver.Education **no** |
 | a duplicate key with **any other effect** — a duplicated `if:`, `env:`, `needs:`, `timeout-minutes:` | **nothing, anywhere** |
 | *when* it is reported | after a full CI run, not at the first job |
 
@@ -131,7 +131,7 @@ The fetch carries no trapdoor: `platform-ref` empty is red, a fetch that fails i
 ref, and a body whose first 400 bytes do not name the script is red. There is no fallback to a local
 copy and no `continue-on-error` — [a gate never tests its own inputs](../ReadingCiSignals).
 
-🚨 **The denominator: five satellites, not six.** MeshWeaver.Crm, .Education, .Manufacturing,
+🚨 **The denominator: the satellites, not every repository.** MeshWeaver.Education, .Manufacturing,
 .Reinsurance and .SocialMedia call `node-repo-validate.yml` and therefore get this guard.
 **MeshWeaver.Plugins does not call that lane at all** — it calls `node-repo-module-pack.yml`,
 `node-repo-gate.yml`, `node-repo-publish-bake.yml`, `node-repo-platform-ref-bump.yml` and
@@ -168,7 +168,6 @@ Swept 2026-09-07 over every satellite's `main`, workflows and composite actions,
 | MeshWeaver.Education | `58c4062a910d` | 2 | clean |
 | MeshWeaver.Reinsurance | `4dd9fadd791d` | 4 | clean |
 | MeshWeaver.SocialMedia | `9408df755cd9` | 5 | clean |
-| MeshWeaver.Crm | `d9e2768cba6d` | 4 | clean |
 | MeshWeaver.Manufacturing | `cfa72caecc37` | 2 | clean |
 
 None of them carries a composite action today. The Education and Crm duplicates from the near-miss

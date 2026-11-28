@@ -32,7 +32,7 @@ public class ARetiredTypesCompileFailureIsNotAnErrorTest
 {
     /// <summary>The stamp shape <c>NodeTypeInstanceProbe.PendingRetirementOf</c> writes.</summary>
     private const string Stamp =
-        "retired by Systemorph/MeshWeaver.Crm sync at 2026-09-24T16:29:03Z; held for 7 instance(s): "
+        "retired by Systemorph/MeshWeaver.Plugins sync at 2026-09-24T16:29:03Z; held for 7 instance(s): "
         + "ExampleRe, SchenkerLabs, …";
 
     /// <summary>The live failure: the retired type's sources name the types Phase C deleted.</summary>

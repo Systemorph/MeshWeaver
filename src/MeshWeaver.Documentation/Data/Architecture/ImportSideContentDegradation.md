@@ -54,7 +54,7 @@ listing shows is correct. Only the keys the *declared type* added — the ones t
 ## The live case
 
 `Crm/Agent/crm-assistant` on the public instance, measured 2026-09-14. The source file in
-`Systemorph/MeshWeaver.Crm` authors nine front-matter keys:
+the CRM's repository authored nine front-matter keys:
 
 ```yaml
 nodeType: Agent

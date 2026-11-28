@@ -783,7 +783,7 @@ public static class PluginGateRunner
     /// <c>true</c> IS a partition root, so its path is just its id — and since
     /// <c>693feae92</c>/<c>ae0f706b3</c> the create-validation chain REFUSES a nested one for every
     /// owning type, not only <c>Space</c>. Building <c>{typePath}/GateProbe</c> unconditionally
-    /// therefore stopped being creatable: MeshWeaver.Crm <c>main</c> went red on <c>Crm/Client</c>
+    /// therefore stopped being creatable: the CRM's <c>main</c> went red on <c>Crm/Client</c>
     /// with <c>Cannot create 'Crm/Client/GateProbe' … must be created at the top level</c>, its
     /// <c>publish-bake</c> never ran, and every merged change became unshippable. The ownership
     /// question is asked through <see cref="PartitionOwningTypes.OwnsPartitionWithoutActivating"/>
@@ -959,7 +959,7 @@ public static class PluginGateRunner
                 // bundle's manifest names but does not carry) is logged at Information by
                 // ShippedPrebuiltBundles / PrebuiltAssemblySeeder. At the gate's default Warning
                 // those lines are never written, so the verdict pointed at evidence that did not
-                // exist: MeshWeaver.Crm main sat red from 2026-08-28 21:54 for ~12 hours on
+                // exist: the CRM's main sat red from 2026-08-28 21:54 for ~12 hours on
                 // "adopted 86 of 87 … 1 were DECLINED" with every per-type verdict green and no
                 // way to tell which assembly, or why, from the job log. The volume is one line
                 // per bundle (34 on that run) — the trace levels stay opt-in via MW_LOG_LEVEL.

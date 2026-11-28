@@ -169,7 +169,7 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
     //    only `Space`. The gate built `{typePath}/GateProbe` unconditionally, so every such type
     //    reported `could not create the Tests probe: InvalidOperationException: Cannot create
     //    '…/GateProbe' … must be created at the top level` and took its repo's `main` red
-    //    (MeshWeaver.Crm on Crm/Client, issue #4602). TWO of them, because relocating the probe to
+    //    (the CRM on Crm/Client, issue #4602). TWO of them, because relocating the probe to
     //    the top level drops the namespace that used to make the constant id `GateProbe` unique —
     //    one gate run covers every type of a repo in a single in-process mesh, so a second owning
     //    type would collide on the same path and fail as already-exists. ──

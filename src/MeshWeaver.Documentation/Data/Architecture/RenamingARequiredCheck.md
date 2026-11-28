@@ -67,7 +67,6 @@ ruleset and every other satellite is classic**, so the safe route genuinely diff
 | MeshWeaver (core) | **ruleset** `2128472` | 1 | — |
 | MeshWeaver.Education | **ruleset** `19153714` | 4 | — |
 | MeshWeaver.Plugins | classic | 5 | **true** |
-| MeshWeaver.Crm | classic | 5 | **true** |
 | MeshWeaver.Reinsurance | classic | 6 | false |
 | MeshWeaver.Manufacturing | classic | 6 | false |
 | MeshWeaver.SocialMedia | classic | 5 | false |
