@@ -151,8 +151,9 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// held are RELEASED: each type that does not compile on this image reads
     /// <c>CompilationStatus: Error</c> with its <c>CompilationError</c> on its own record, where an
     /// operator and the type's owner can see it. The regression is still recorded — the phase stays
-    /// Regressed, the detail still names every type, and the host reports the check Degraded rather
-    /// than Healthy.</para>
+    /// Regressed, the detail still names every type, and the host check answers Healthy with the
+    /// errored types in its description — never Degraded, because the gate's verdicts stay Healthy
+    /// and Unhealthy only.</para>
     ///
     /// <para><b>Why the hold was retired.</b> Holding the roll on any one type made one package's
     /// broken NodeType hold the whole platform (policy <c>platform-rolls-independently-of-packages</c>),
