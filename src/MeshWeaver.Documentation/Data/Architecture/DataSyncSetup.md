@@ -307,7 +307,7 @@ deployment can **break the sync and make it its own**.
 The portal pulls a partition when the repository's green `main` build arrives as a `workflow_run`
 webhook (`GitHubWebhookProcessor`); a `push` only logs that a build is coming. A repository created
 without a hook to a portal therefore syncs exactly as often as somebody triggers it by hand — and
-nothing measures the gap. `MeshWeaver.Crm` (created 2026-08-28, no hooks) last synced to
+nothing measures the gap. A content repository created 2026-08-28 with no hooks last synced to
 the control instance on 08-30; by 09-07 the repository was 54 commits ahead, the portal still held
 files the repository had retired, every prebuilt Crm bundle was refused by the source-fingerprint
 gate (the bundle was built from the newer files), and every Crm page compiled the stale copy on

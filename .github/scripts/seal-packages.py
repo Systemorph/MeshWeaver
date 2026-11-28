@@ -1208,7 +1208,7 @@ def module_rider_cases(expect) -> None:
     moved sources), so its module package — declaring MeshWeaver.Markdown.Collaboration — is carried
     at the PREVIOUS build, while AI's module package, built fresh, rides the same assembly at THIS
     commit's build. Sealed as it was, every satellite gate composing AI + Essentials refused the set
-    (MeshWeaver.SocialMedia#246, MeshWeaver.Manufacturing#84, MeshWeaver.Crm#172)."""
+    (MeshWeaver.SocialMedia#246, MeshWeaver.Manufacturing#84)."""
     collab, ai, stripe = "MeshWeaver.Markdown.Collaboration", "MeshWeaver.AI", "MeshWeaver.Payments.Stripe"
     print("a carried module package and a fresh one riding the same assembly (one build per name):")
     with tempfile.TemporaryDirectory() as tmp:

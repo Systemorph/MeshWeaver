@@ -85,7 +85,6 @@ Actions storage cost **$263.29** net from 1 to 20 October. Actions compute was *
 | MeshWeaver.Education | 1,190–1,660 (before the 10-21 switch) | ~10 GB live before the switch: `bake-<sha>` 7.1 GB, `e2e-upstream` 2.8 GB; 1.2 GB of caches |
 | MeshWeaver.Reinsurance | **863, every full day since 09-22** | 7 MB of `gate-log-*`, no caches |
 | MeshWeaver.SocialMedia | ~550 | no live artifacts; 11.6 GB of caches, last restored 10-16 |
-| MeshWeaver.Crm | **514, every full day since 09-22** | 3 MB of `gate-log-*`, no caches |
 | MeshWeaver.Manufacturing | **48, every full day since 09-22** | 1.5 MB of `gate-log-*`, no caches |
 | MeshWeaver (public) | ~125,000 | not billed |
 
@@ -126,7 +125,6 @@ repos pay.
 | MeshWeaver.Reinsurance | 10.2 GB | $4.53 |
 | MeshWeaver.Education | 8.4 GB | $4.59 |
 | MeshWeaver.Manufacturing | 6.1 GB | $0.47 |
-| MeshWeaver.Crm | 6.0 GB | $2.51 |
 | MeshWeaver (public) | 4,353 GB avg | **$0** |
 
 🚨 **Actions CACHE is not billed.** Plugins holds 11.87 GB of cache and SocialMedia 11.38 GB against
@@ -149,7 +147,6 @@ expiry, and fitting the lag per repository, reconciles **every repo to within 1%
 |---|--:|--:|--:|
 | MeshWeaver.Plugins | 2.8 d | 21,885 | 21,904 |
 | MeshWeaver.Reinsurance | 5.0 d | 1,183 | 1,189 |
-| MeshWeaver.Crm | 5.8 d | 730 | 729 |
 | MeshWeaver.Manufacturing | 4.0 d | 228 | 228 |
 | MeshWeaver.Education | 4.8 d | 1,249 | 1,259 |
 | MeshWeaver.SocialMedia | 2.2 d | 584 | 573 |

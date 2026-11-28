@@ -75,7 +75,6 @@ This was measured on 2026-10-01. Each repo was read with `git grep` on its remot
 | **MeshWeaver.Plugins** (every node folder; `src/` excluded) | **270**: 149 local `AsSystem(...)` wrappers, 69 `SystemIdentity.Run`, 26 `ImpersonateAsSystem`, 14 `MeshQueryRequest.AsSystem()`, 8 `AccessContextScope.AsSystem`, 2 `ImpersonateAsSystemFor` | 104 |
 | **MeshWeaver.Reinsurance** | 5 `ImpersonateAsSystem` | 4 |
 | **MeshWeaver.SocialMedia** (`src/` excluded) | 1 `ImpersonateAsSystem` + 3 wrapper calls | 2 |
-| **MeshWeaver.Crm** | 1 `ImpersonateAsSystem` | 1 |
 | **Education, Manufacturing, Memex** (`mesh/`, `samples/`, `deployments/`) | 0 | 0 |
 
 The in-mesh tests in Plugins add 53 `ImpersonateAsSystem`, 29 `RunAsSystem`, 29 `SystemIdentity.Run` and 114 wrapper calls. They compile in the mesh too, under the same package roots.

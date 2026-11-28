@@ -64,7 +64,6 @@ metadata. The secret values were not read.
 | MeshWeaver.Reinsurance | `17b161a9c2fe6ec50a9764c66bd2b332d7f27621` | `reinsurance` / `plugins crm` | `main` |
 | MeshWeaver.SocialMedia | `3fa2cab318bf7442a17b83060e80031e09f2f961` | `socialmedia` / `plugins` | `main` |
 | MeshWeaver.Manufacturing | `73e3da77131a1401af20a3545c2acf16ec0b9add` | `manufacturing` / `plugins` | `main` |
-| MeshWeaver.Crm | `a55fec3abce3bc448afb45d48d83d856a334f749` | `crm` / `plugins` | `main` |
 
 The publication jobs depend on each caller's validation set and run for default-branch pushes,
 scheduled runs and repository dispatches. The shared notification remains downstream of a

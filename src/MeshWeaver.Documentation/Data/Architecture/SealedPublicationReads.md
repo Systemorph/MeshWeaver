@@ -647,7 +647,7 @@ Measured on the control instance, 2026-09-08, two ways they were NOT the same co
    is" — correctly. Nothing re-fired when the seal landed minutes later, so *when it is* was never.
 2. **"At the commit" was a claim, not a fact.** The config recorded `lastSyncCommitSha = 76cdb553b`
    with outcome `Skipped`: the importer's content marker matched, so it never read the partition.
-   Three `Crm/Source/Mail*` files a commit had deleted (Crm#54) were still in the mesh — kept from
+   Three `Crm/Source/Mail*` files a commit had deleted were still in the mesh — kept from
    the prune because the conflict horizon was frozen and, judged by timestamp alone, the previous
    import's own writes read as "newer on the server". 25 live sources against a bake of 22; no bake
    of that repository could ever match again.

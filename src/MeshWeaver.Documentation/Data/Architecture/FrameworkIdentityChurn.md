@@ -248,7 +248,7 @@ already built. It was. Three readings, each of which could have falsified this a
 
 **1. The satellites resolved the newest platform-SEALED set on `schedule` before this row was
 written.** `MeshWeaver.Manufacturing`'s `ci.yml` at `e050bb1994` (the copy in force on 2026-09-10)
-and `MeshWeaver.Crm`'s at `ea933f597` (2026-09-10T06:10Z) both carry a step named, literally,
+and another satellite's at `ea933f597` (2026-09-10T06:10Z) both carry a step named, literally,
 **"Resolve the newest retained sealed platform set"**, running `scripts/resolve-platform.py` on every
 trigger, with `--wait-for-seal 900` added on `schedule` and `repository_dispatch`. The row claiming
 "NOT DONE" was written on 2026-09-12 09:21Z, two days later. Core's own reusable lanes got the same
@@ -421,7 +421,7 @@ Not composing from the registry instead: that is the decline this exists to end.
 
 **Read reading 2 before re-running anything.** If the identity turns out to be sealed for `plugins`
 and the 404 persists, it is the second case: the remedy is a **republish of `plugins` under a core
-carrying #2707**, not a re-run and not waiting, and it is a person's act. Measured shape, `MeshWeaver.Crm#147`
+carrying #2707**, not a re-run and not waiting, and it is a person's act. Measured shape, a satellite pull request's
 attempt 1 (2026-09-22 14:44:37Z): identity `s187230304209d9fab880cdc9f1adfa7b` held exactly ONE
 publication, `meshweaver-content` — the lag, which attempt 2 cleared once the fleet moved to
 `s6d5e8c975a58748025c7283aadea8c5f` and its eight seals.

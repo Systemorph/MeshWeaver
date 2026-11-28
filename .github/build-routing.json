@@ -4,7 +4,6 @@
   "hostForced": [
     "MeshWeaver",
     "MeshWeaver.Plugins",
-    "MeshWeaver.Crm",
     "MeshWeaver.Education",
     "MeshWeaver.Reinsurance",
     "MeshWeaver.SocialMedia",

@@ -11,7 +11,7 @@ DIFFERENTLY, and not one CI lane in the fleet went red:
   * MeshWeaver.Reinsurance — `AttributeError: module 'compile_check' has no attribute
     'usings_union'`, raised before a single test ran, while its own `--self-test` printed
     `✓ self-test green` (it exercised only the collision detector);
-  * MeshWeaver.Crm — patched locally with a re-derived global-usings union, so it kept RUNNING
+  * a third satellite — patched locally with a re-derived global-usings union, so it kept RUNNING
     against a compile model the gate had abandoned: 163 tests passing under a shaping the mesh
     does not use;
   * MeshWeaver.Plugins — kept working only because it loads a VENDORED `compile-check.py` fork that
@@ -50,7 +50,7 @@ from pathlib import Path
 
 CANONICAL = "run-node-tests.py"
 # 🚨 EVERY copy, WHEREVER IT SITS — never one hard-coded path. The three vendored copies did not
-# agree on a location: MeshWeaver.Crm and MeshWeaver.Reinsurance kept theirs at `scripts/`,
+# agree on a location: MeshWeaver.Reinsurance and a third satellite kept theirs at `scripts/`,
 # MeshWeaver.Plugins at `devtools/` (a declared no-op dir). A guard that looked only under `scripts/`
 # would have reported "no copy — nothing to check" for the repo whose copy was the one still running
 # against the abandoned model, which is a FALSE PASS wearing a clean notice. So the subject is

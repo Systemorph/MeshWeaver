@@ -19,7 +19,7 @@ namespace MeshWeaver.Hosting.Test;
 ///
 /// <para>The live case is <c>Crm/Agent/crm-assistant</c> on <c>memex.meshweaver.cloud</c>: measured
 /// 2026-09-14, <c>content.$type</c> is <c>MarkdownContent</c> and the node has no description,
-/// while the source file at <c>Systemorph/MeshWeaver.Crm</c> authors <c>displayName</c>,
+/// while the source file in the CRM's repository authors <c>displayName</c>,
 /// <c>description</c>, <c>exposedInNavigator</c>, <c>contextMatchPattern</c> and <c>plugins</c>.
 /// It served that way for twelve days and was found by a human noticing a blank description in the
 /// agent dropdown — there was no other instrument, because the READ-side one
@@ -46,7 +46,7 @@ public class ATypedNodeDegradedToMarkdownSaysSoTest
 {
     /// <summary>
     /// The front matter of <c>Crm/Agent/crm-assistant.md</c> as
-    /// <c>Systemorph/MeshWeaver.Crm@main</c> authors it (read 2026-09-14), trimmed of the icon SVG
+    /// the CRM's repository authored it (read 2026-09-14), trimmed of the icon SVG
     /// and the instructions body. Reproduced verbatim rather than paraphrased so the test fails for
     /// the same reason production did.
     /// </summary>

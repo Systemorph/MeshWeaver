@@ -1073,7 +1073,7 @@ line of the verdict naming the CONTENT.
   maintainer rule, verbatim: *"for compile always find latest package of platform and plugins"*).
   A satellite resolves the newest platform-sealed core set at run time (#3842) and re-resolves it
   in the first step of every normal job, so a *Re-run failed jobs* tests the newest packages
-  (Education#320/#323, Reinsurance#202, Crm#94, Manufacturing#82, SocialMedia#181, Plugins#1739) —
+  (Education#320/#323, Reinsurance#202, Manufacturing#82, SocialMedia#181, Plugins#1739) —
   but a `uses:` job takes its digests as call-time inputs from the caller's stored `platform-ref`
   outputs, and GitHub offers no hook inside a reusable workflow to re-resolve. So `node-repo-gate.yml`
   (`plan`, then once more per shard against `plan`'s row as `PLATFORM_BASELINE`) and
@@ -1248,7 +1248,7 @@ same eight assemblies — the three `*/Gallery` types against `MeshWeaver.Maps`,
 `Cornerstone/Pricing` plus four `Store/*` types against `MeshWeaver.Payments.Stripe` — each with
 `0 new failure(s), 0 stale allow entr(ies)`: everything compiled, every test passed, and the *only*
 defect was the missing declarations. Naming all four took them to **114/114** and **103/103**
-adopted with zero declines. MeshWeaver.Crm already declared all four and never showed the shape —
+adopted with zero declines. A third satellite already declared all four and never showed the shape —
 the control that makes the reading conclusive.
 
 🚨 **The set is not "the modules we started with".** Core CD's `plugins-modules` packed every module

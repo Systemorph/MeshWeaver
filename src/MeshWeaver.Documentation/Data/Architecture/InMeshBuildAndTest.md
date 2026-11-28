@@ -429,7 +429,6 @@ Fleet state, measured 2026-09-01 — compiled xUnit projects remaining:
 | MeshWeaver (platform) | 38 | 1 239 |
 | MeshWeaver.Plugins | 64 | 1 237 |
 | MeshWeaver.SocialMedia | 1 | 16 |
-| MeshWeaver.Crm | **0** | **0** |
 | MeshWeaver.Education / .Reinsurance / .Manufacturing | **0** | **0** |
 
 🚨 **Crm is the reference, not the laggard.** It has no compiled test project at all and 13 in-mesh
