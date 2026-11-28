@@ -105,7 +105,7 @@ repositories**; `sev:M` and `sev:L` never gate a cut. That is policy
 [`release-blocker-gate`](../../../src/MeshWeaver.Documentation/Data/Architecture/PolicyNotProse.md),
 which carries when it took effect and who set it — this page carries only the rule.
 
-Enforced by `Governance/Standards/release.cut` in MeshWeaver.Plugins — 7 repositories × 2 labels = 14
+Enforced by `Governance/Standards/release.cut` in MeshWeaver.Plugins — 6 repositories × 2 labels = 12
 `NoOpenIssues` gates — so a release proposal cannot reach `Ready` while one is open. `Memex` and
 `MeshWeaver.Feedback` are deliberately outside it. Rubric and the two rules that keep it honest:
 [Issue Taxonomy](../../../src/MeshWeaver.Documentation/Data/Architecture/IssueTaxonomy.md).
