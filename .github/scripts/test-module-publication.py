@@ -140,7 +140,12 @@ class Registry:
                 body = self.rfile.read(length)
                 log.append({"path": self.path, "body": body,
                             "auth": self.headers.get("Authorization", "")})
-                self.send_response(outer.status)
+                code = outer.status
+                if getattr(outer, "fail_first", 0) and len(log) <= outer.fail_first:
+                    pass            # this answer keeps the registry's failing status
+                elif getattr(outer, "fail_first", 0):
+                    code = 200      # …and every later one succeeds
+                self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(b'{"ok":true}')
@@ -365,6 +370,30 @@ def main() -> int:  # noqa: C901
                 check("…after actually asking the registry", len(refusing.requests) == 1)
             finally:
                 refusing.close()
+
+            print("\n== A 5xx from one replica is re-asked; a 4xx never is")
+            os.environ["MW_PUBLISH_RETRY_DELAYS"] = "0,0"
+            for code, expect_asks, why in ((500, 3, "a 500 is re-asked on the whole schedule and then reds"),
+                                           (409, 1, "a 409 is the registry's answer and is asked once")):
+                flaky = Registry(status=code)
+                try:
+                    r = do_publish(REGISTRY=flaky.url)
+                    check(f"{why} (asked {len(flaky.requests)}x)",
+                          r.returncode == 1 and len(flaky.requests) == expect_asks, r.stdout + r.stderr)
+                    if code == 500:
+                        check("…and names how many attempts it took", "after 3 attempts" in (r.stdout + r.stderr),
+                              r.stdout + r.stderr)
+                finally:
+                    flaky.close()
+            seq = Registry(status=500)
+            seq.fail_first = 1   # the first answer is a 500, the next a 200: the second replica took it
+            try:
+                r = do_publish(REGISTRY=seq.url)
+                check("a 500 then a 200 PUBLISHES (the other replica took it) — green, asked twice",
+                      r.returncode == 0 and len(seq.requests) == 2, r.stdout + r.stderr)
+            finally:
+                seq.close()
+            os.environ.pop("MW_PUBLISH_RETRY_DELAYS", None)
 
             print("\n== MUTATIONS of the caller's graph (the half the runtime verdict cannot see)")
             caller_dir = ws / "caller" / ".github" / "workflows"
