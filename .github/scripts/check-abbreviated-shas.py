@@ -11,7 +11,7 @@ editing the named variable reaches none of the `uses:`/`platform-ref:` literals 
 workflow's `with:` cannot read.
 
 It has ONE blind spot, and it fired THREE TIMES IN THREE REPOS on 2026-09-09 alone
-(MeshWeaver.Reinsurance, MeshWeaver.Crm, MeshWeaver.Manufacturing): the NARRATIVE comment names the
+(MeshWeaver.Reinsurance, MeshWeaver.Manufacturing and a third satellite): the NARRATIVE comment names the
 pin in ABBREVIATED form. A 40-hex substitution cannot see `7bfe2d907`, while the SET NAME in the
 same sentence — `3.0.0-ci.8055` — is a separate substitution that DOES move. What is left is the
 worst available state:

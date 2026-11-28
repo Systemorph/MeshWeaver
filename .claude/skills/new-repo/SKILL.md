@@ -25,7 +25,7 @@ this one is the current fleet and that one is history.
   `preflight` (`resolve-platform.py`, the newest SEALED set) — `Nothing pins the platform` REFUSES a
   pin coming back. §5's "pin every `uses:` to a 40-char SHA" describes the pre-2026-09-12 shape.
   **Copy `MeshWeaver.FundReporting@main`'s `ci.yml`** (a live content-only caller — no `src/` and no module
-  lane; `MeshWeaver.Crm`, the earlier template, is archived and its CRM ships from MeshWeaver.Plugins/Crm;
+  lane;
   SocialMedia's carries a `src/` module lane you do not want).
 - **Core's fleet roster must name the repo, or `validate` is red on the first PR.** `node-repo-validate`
   asserts a row for the calling repo in core's `.github/lane-caller-grants.yml` (`This repo's callers
@@ -629,7 +629,7 @@ is what turns another repo's green lane red. Full text:
 Dependabot: `secrets` provisioned for Actions are **not** visible to Dependabot-triggered runs —
 provision the pair under *Secrets → Dependabot* too, or a dependabot PR fails preflight.
 
-## 10a. Provisioning, end to end — measured 2026-08-28 standing up MeshWeaver.Crm
+## 10a. Provisioning, end to end — measured 2026-08-28 standing up a content repository
 
 Everything in §10 is a NAME; this is where each VALUE comes from, in the order that worked, with
 the three traps that cost a retry. Nothing here needs a second person — Systemorph issues every
@@ -710,7 +710,7 @@ build, and a Dependabot PR would fight the reconciler. See [`/new-deployment`](.
 
 ## 12. Webhooks — one per LIVE portal, or the fleet never sees the repo
 
-**Measured 2026-09-07 (MeshWeaver#3582, #3583).** `MeshWeaver.Crm` was created on 08-28 with
+**Measured 2026-09-07 (MeshWeaver#3582, #3583).** A content repository was created on 08-28 with
 everything above and **no webhooks**. Nothing checked. Its partition on the control instance last
 synced on 08-30; ten days later the repo was 54 commits ahead, the portal still held files the repo
 had retired, every prebuilt Crm bundle was refused by the source-fingerprint gate (#2813), and

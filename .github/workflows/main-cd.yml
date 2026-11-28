@@ -430,7 +430,7 @@ jobs:
           # with (content-app-id on node-repo-compile-check.yml). Asserted here, on every tick, so a
           # missing credential is a red preflight naming it — never a leg that mints nothing and is
           # painted grey. Measured 2026-09-12: the App (`meshweaver-reader`, installation 161095771)
-          # is installed org-wide (repository_selection: all), MeshWeaver.Crm included.
+          # is installed org-wide (repository_selection: all).
           [ -n "$FLEET_READER_APP_ID" ]          || missing+=("secrets.FLEET_READER_APP_ID          app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read), whose installation token checks out each satellite's main for satellite-compat — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
           [ -n "$FLEET_READER_APP_PRIVATE_KEY" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY  that App's private key (PEM), in BOTH stores like the id. NOT meshweaver-cloud's key: that App holds write")
           if [ ${#missing[@]} -gt 0 ]; then
@@ -5131,7 +5131,7 @@ jobs:
   # (so a verdict here is a verdict about the very bytes the satellites consume). It
   # is the reusable compile gate the satellites run on their own pull requests, pointed at their
   # content from here; `compile-check.py` is fetched at THIS run's core sha. Measured on the same
-  # lane (MeshWeaver.Crm run 34686027657, 2026-09-12): 1 min 50 s per leg.
+  # lane (2026-09-12): 1 min 50 s per leg.
   #
   # 🚨 RED, BUT NOT BLOCKING — and both halves are deliberate.
   #   * NOT blocking: it runs AFTER `promote` (the set is already armed), and neither

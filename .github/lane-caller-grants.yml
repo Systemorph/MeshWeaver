@@ -286,7 +286,7 @@ repos:
         job: gate-follow
         lane: build-follow.yml
         grants: {contents: read, id-token: write}
-      # ── Retry known transients (MeshWeaver.Manufacturing#84) — ARRIVING. The thin caller, as in MeshWeaver.Crm.
+      # ── Retry known transients (MeshWeaver.Manufacturing#84) — ARRIVING. The thin caller.
       - workflow: retry-known-transients.yml
         job: retry
         lane: node-repo-retry-transients.yml
@@ -609,8 +609,7 @@ repos:
         lane: node-repo-request-review.yml
         grants: {contents: read, pull-requests: write}
         pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)
-      # ── Automatic review answered (MeshWeaver#4776) — ARRIVING. The thin review-answered.yml caller, identical to
-      # MeshWeaver.Crm's; the context joins protection only after it has run green on main.
+      # ── Automatic review answered (MeshWeaver#4776) — ARRIVING. The thin review-answered.yml caller; the context joins protection only after it has run green on main.
       - workflow: review-answered.yml
         job: review-answered
         lane: node-repo-review-answered.yml

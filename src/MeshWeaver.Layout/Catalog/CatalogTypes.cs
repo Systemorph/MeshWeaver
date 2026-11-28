@@ -32,7 +32,7 @@ public record SectionConfig
     // WhenWritingDefault, which compares against the CLR default (false) — not against this
     // property's initializer (true). So `true` went over the wire and `false` was DROPPED, and the
     // reader then re-applied the initializer: an explicit "off" arrived as "on", and these flags
-    // could not be turned off at all. Measured 2026-08-29 on MeshWeaver.Crm's activity feed, which
+    // could not be turned off at all. Measured 2026-08-29 on the CRM's activity feed, which
     // asked for newest-first and silently rendered oldest-first.
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool ShowCounts { get; init; } = true;
@@ -57,7 +57,7 @@ public record SectionConfig
     // WhenWritingDefault, which compares against the CLR default (false) — not against this
     // property's initializer (true). So `true` went over the wire and `false` was DROPPED, and the
     // reader then re-applied the initializer: an explicit "off" arrived as "on", and these flags
-    // could not be turned off at all. Measured 2026-08-29 on MeshWeaver.Crm's activity feed, which
+    // could not be turned off at all. Measured 2026-08-29 on the CRM's activity feed, which
     // asked for newest-first and silently rendered oldest-first.
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool Collapsible { get; init; } = true;
@@ -88,7 +88,7 @@ public record SortConfig
     // WhenWritingDefault, which compares against the CLR default (false) — not against this
     // property's initializer (true). So `true` went over the wire and `false` was DROPPED, and the
     // reader then re-applied the initializer: an explicit "off" arrived as "on", and these flags
-    // could not be turned off at all. Measured 2026-08-29 on MeshWeaver.Crm's activity feed, which
+    // could not be turned off at all. Measured 2026-08-29 on the CRM's activity feed, which
     // asked for newest-first and silently rendered oldest-first.
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool Ascending { get; init; } = true;
@@ -105,7 +105,7 @@ public record SortConfig
     // WhenWritingDefault, which compares against the CLR default (false) — not against this
     // property's initializer (true). So `true` went over the wire and `false` was DROPPED, and the
     // reader then re-applied the initializer: an explicit "off" arrived as "on", and these flags
-    // could not be turned off at all. Measured 2026-08-29 on MeshWeaver.Crm's activity feed, which
+    // could not be turned off at all. Measured 2026-08-29 on the CRM's activity feed, which
     // asked for newest-first and silently rendered oldest-first.
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool ThenByAscending { get; init; } = true;

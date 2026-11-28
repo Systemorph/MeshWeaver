@@ -1893,7 +1893,7 @@ follow-up, not a claim about today.
 >   disabled**: its annotation path — runner death, budget refusal — reads no log at all, so
 >   `rerun-failed-jobs` has been reachable there throughout. The log fix adds a second proof shape
 >   to a lane that already acts.
-> * **Crm / Reinsurance / SocialMedia** (Crm#125, Reinsurance#218, SocialMedia#202) were the ones the
+> * **Reinsurance / SocialMedia** and a third satellite (Reinsurance#218, SocialMedia#202) were the ones the
 >   hold applied to — their shell stewards could retry **nothing**, so merging is the moment retries
 >   begin there. They were parked as **drafts** while that call was open, because each of those
 >   repos runs `auto-arm.yml` and would otherwise have merged them on green with the call never
@@ -1994,13 +1994,13 @@ pull request would unblock `MeshWeaver.Plugins`. It would not have: 19 open PRs 
 own stale `MW_PLATFORM_REF`, and the gate read each PR's own copy. The remedy was to merge the pin
 branch **into all 19**, then verify per branch. A pin move on `main` unblocks exactly zero open PRs.
 
-**The Dependabot secret preflight — the more dangerous shape.** `MeshWeaver.Crm` added its
+**The Dependabot secret preflight — the more dangerous shape.** A satellite added its
 `MW_REGISTRY_KEY` assertion to the preflight on `main` at 12:45Z. Its five open Dependabot PRs carry
 `ci.yml` from before that:
 
 ```bash
-gh api "repos/Systemorph/MeshWeaver.Crm/contents/.github/workflows/ci.yml?ref=$(
-  gh api repos/Systemorph/MeshWeaver.Crm/pulls/59 --jq .head.sha)" --jq .content \
+gh api "repos/Systemorph/<repo>/contents/.github/workflows/ci.yml?ref=$(
+  gh api repos/Systemorph/<repo>/pulls/<n> --jq .head.sha)" --jq .content \
   | base64 -d | grep -c 'MW_REGISTRY_KEY:-'
 # 0   ← on main this reads 1
 ```

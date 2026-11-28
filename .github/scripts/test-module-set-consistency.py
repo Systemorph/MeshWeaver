@@ -398,11 +398,11 @@ def case_upstream_copies_are_composed_never_sealed(lane: str, body: str, tmp: Pa
     # The shape Crm's and Education's publish-bake actually run (2026-09-12 logs): four packages
     # composed from `plugins`' seal — AI, Essentials (whose module is Markdown.Collaboration), Maps,
     # Stripe — and one own module. Names as the logs print them; bytes synthetic.
-    make_bundle(own_dir / "crm.module.nupkg", "MeshWeaver.Crm", {"MeshWeaver.Shared": BUILD_A})
+    make_bundle(own_dir / "satellite.module.nupkg", "MeshWeaver.Satellite", {"MeshWeaver.Shared": BUILD_A})
     for package, module in (("ai", "MeshWeaver.AI"), ("essentials", "MeshWeaver.Markdown.Collaboration"),
                             ("maps", "MeshWeaver.Maps"), ("stripe", "MeshWeaver.Payments.Stripe")):
         make_bundle(up_dir / f"{package}.module.nupkg", module, {"MeshWeaver.Shared": BUILD_A})
-    own = [own_dir / "crm.module.nupkg"]
+    own = [own_dir / "satellite.module.nupkg"]
     upstream = sorted(up_dir.glob("*.nupkg"))
 
     result = run_step(body, work, own, upstream=upstream)
@@ -413,7 +413,7 @@ def case_upstream_copies_are_composed_never_sealed(lane: str, body: str, tmp: Pa
         return
     # Compile surface: every bundle, own and upstream, is composed and counted.
     composed = {p.name for p in ext_dir(work).iterdir()}
-    expected = {"MeshWeaver.Crm", "MeshWeaver.AI", "MeshWeaver.Markdown.Collaboration",
+    expected = {"MeshWeaver.Satellite", "MeshWeaver.AI", "MeshWeaver.Markdown.Collaboration",
                 "MeshWeaver.Maps", "MeshWeaver.Payments.Stripe"}
     if composed != expected:
         fail(f"{lane}: composed set is {sorted(composed)}, expected {sorted(expected)} — an upstream "
@@ -424,8 +424,8 @@ def case_upstream_copies_are_composed_never_sealed(lane: str, body: str, tmp: Pa
         return
     sealed = sorted(p.name for p in seal_dir(work).iterdir()) if seal_dir(work).is_dir() else []
     if lane == "node-repo-publish-bake.yml":
-        if sealed != ["crm.module.nupkg"]:
-            fail(f"{lane}: the seal holds {sealed}, expected exactly ['crm.module.nupkg'] — an "
+        if sealed != ["satellite.module.nupkg"]:
+            fail(f"{lane}: the seal holds {sealed}, expected exactly ['satellite.module.nupkg'] — an "
                  "upstream's module must never be re-sealed by a downstream (MeshWeaver#3732)")
             return
         if "sealed set: 1 own module bundle(s)" not in result.stdout \

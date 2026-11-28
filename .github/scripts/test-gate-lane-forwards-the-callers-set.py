@@ -7,7 +7,7 @@ WHY. A caller that pins its digests has ALREADY resolved the set (every satellit
 reached yet — waited out, bounded — from one it has moved past (#4281). The lane dropped it on the
 pinned path (`platform-set=` echoed empty in `plan`, not emitted at all in the shard), so a set
 sealed minutes before the run was refused at once on every volume shard until the refresh's next
-tick: MeshWeaver.Crm#108 on 2026-09-15 (3.0.0-ci.8687 sealed 17:43:27Z, shard at 17:50Z). The
+tick: a satellite pull request on 2026-09-15 (3.0.0-ci.8687 sealed 17:43:27Z, shard at 17:50Z). The
 workflow is YAML driving bash, so this reads the steps' text and asserts each hop of the chain; each
 assertion names the hop it guards so a red says which link broke.
 

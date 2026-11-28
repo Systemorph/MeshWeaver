@@ -72,7 +72,6 @@ across the **six repositories** that carry the taxonomy: `MeshWeaver`, `MeshWeav
 `MeshWeaver.SocialMedia`, `MeshWeaver.Reinsurance`, `MeshWeaver.Manufacturing`,
 `MeshWeaver.Education`. `Memex` and `MeshWeaver.Feedback` are deliberately not gated: they ship no
 product code.
-`MeshWeaver.Crm` left the set when it was archived (2026-11): the CRM ships from `MeshWeaver.Plugins/Crm`.
 
 > 🚨 **Name the repositories; never write "every repo of the product".** A repo that is not on the
 > list is not gated, and — worse — a repo on the list that has never had the `sev:B` label *created*

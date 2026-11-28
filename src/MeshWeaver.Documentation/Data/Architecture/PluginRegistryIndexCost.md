@@ -149,7 +149,7 @@ the fix it passes, and the read shows the parked module as not yet recorded — 
 
 What this does **not** establish: that this queue was the stall behind the 2026-09-20
 08:02–08:08Z occurrence. That window does coincide with three satellite `publish-bake` runs hitting
-the registry (MeshWeaver.Crm 08:01:54–08:05:25Z, MeshWeaver.Manufacturing 08:01:38–08:05:14Z,
+the registry (one satellite 08:01:54–08:05:25Z, MeshWeaver.Manufacturing 08:01:38–08:05:14Z,
 MeshWeaver.Reinsurance 08:04:06–08:11:00Z), each of which reads the index — concurrent readers on
 one lane — but none of them POSTed a module to the shelf, and the registry's own log for the window
 was not read. The mesh-read costs above and the entitlement evaluation are untouched, and nobody has
