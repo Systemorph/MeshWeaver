@@ -46,6 +46,10 @@ public static class PullRequestLayoutAreas
         var prPath = host.Hub.Address.ToString();
         var spacePath = prPath.Split('/', 2)[0];
         var userId = host.Hub.ServiceProvider.GetService<AccessService>()?.Context?.ObjectId ?? "";
+        // No signed-in identity: Submit and Check status would run under an empty user, so refuse
+        // up front with the same hint the Sync tab shows rather than render a button that cannot work.
+        if (string.IsNullOrEmpty(userId))
+            return Observable.Return<UiControl?>(GitSyncViews.Hint(host.Localize("ui.gitSync.tab.signInToConnect")));
         var prService = host.Hub.ServiceProvider.GetRequiredService<PullRequestService>();
         var locale = host.ViewerLocale();
 
