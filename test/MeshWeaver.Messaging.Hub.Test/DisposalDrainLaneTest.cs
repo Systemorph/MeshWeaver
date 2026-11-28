@@ -104,16 +104,19 @@ public class DisposalDrainLaneTest : HubTestBase
         using var lane = new DisposalDrainLane();
         const int blocked = 8;
         const int queued = 300;
-        using var releaseBlockers = new ManualResetEventSlim(false);
-        var started = new CountdownEvent(blocked);
+        // No hand-woven gate (HandWovenGateRatchetGuard): the blockers hold their lane thread by
+        // spinning on a flag, and the test learns they started from a counter.
+        var release = 0;
+        var started = 0;
         try
         {
             var holders = Enumerable.Range(0, blocked).Select(_ => Task.Factory.StartNew(() =>
             {
-                started.Signal();
-                releaseBlockers.Wait(TestTimeouts.Convergence);
+                Interlocked.Increment(ref started);
+                SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.Convergence);
             }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, lane.Scheduler)).ToArray();
-            started.Wait(TestTimeouts.Quick, TestContext.Current.CancellationToken).Should().BeTrue("the blockers occupy lane threads");
+            SpinWait.SpinUntil(() => Volatile.Read(ref started) == blocked, TestTimeouts.Quick)
+                .Should().BeTrue("the blockers occupy lane threads");
 
             var drains = Enumerable.Range(0, queued).Select(_ => Task.Factory.StartNew(
                 () => Thread.CurrentThread.Name, CancellationToken.None,
@@ -129,7 +132,7 @@ public class DisposalDrainLaneTest : HubTestBase
         }
         finally
         {
-            releaseBlockers.Set();
+            Volatile.Write(ref release, 1);
         }
     }
 
